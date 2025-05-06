@@ -15,18 +15,18 @@
     * [ ] **Action:** Set up AWS Budgets and billing alerts for cost control (e.g., target < $30). *(Skipped for now)*
 
 3.  **Infrastructure as Code (IaC - Terraform/CDK):**
-    * [ ] Initialize Terraform/CDK project in the `/iac` directory.
-    * [ ] **Write IaC Scripts:** Define resources for:
-        * [ ] VPC, **Public Subnet(s)**, Internet Gateway. *(Remove Private Subnets & NAT Gateway)*.
-        * [ ] Security Groups (for EC2 - allow SSH, Airflow UI, MLflow UI, API port from your IP; allow necessary egress).
-        * [ ] IAM Roles & Policies (for EC2 Instance Profile allowing S3, ECR access). *(Remove EKS-specific roles)*.
-        * [ ] EC2 Instance (Choose **Free Tier eligible** type like `t2.micro` or `t3.micro` if possible, ensure sufficient RAM/CPU for Docker, Airflow, MLflow, DB, K8s). Configure User Data to install Docker, Docker Compose, Git.
-        * [ ] S3 Bucket (for data, MLflow artifacts, reports - enable versioning).
-        * [ ] ECR Repository (for the model API Docker image).
+    * [ ] Initialize Terraform/CDK project in the `/iac` directory. *(Terraform files created, user to init/plan/apply. See `project_docs/terraform_guide.md`)*
+    * [ ] **Write IaC Scripts:** Define resources for: *(Initial scripts created for VPC, Subnet, IGW, SG, IAM, EC2, S3, ECR. See `project_docs/terraform_guide.md` for customization and deployment)*
+        * [ ] VPC, **Public Subnet(s)**, Internet Gateway. *(Initial script created)*
+        * [ ] Security Groups (for EC2 - allow SSH, Airflow UI, MLflow UI, API port from your IP; allow necessary egress). *(Initial script created)*
+        * [ ] IAM Roles & Policies (for EC2 Instance Profile allowing S3, ECR access). *(Initial script created)*
+        * [ ] EC2 Instance (Choose **Free Tier eligible** type like `t2.micro` or `t3.micro` if possible, ensure sufficient RAM/CPU for Docker, Airflow, MLflow, DB, K8s). Configure User Data to install Docker, Docker Compose, Git. *(Initial script created)*
+        * [ ] S3 Bucket (for data, MLflow artifacts, reports - enable versioning). *(Initial script created)*
+        * [ ] ECR Repository (for the model API Docker image). *(Initial script created)*
         * *(Remove RDS Instance definition)*.
         * *(Remove EKS Cluster & Node Group definitions)*.
-    * [ ] **Deploy Infrastructure:** Run `terraform init`, `terraform plan`, `terraform apply`. Verify resource creation. **Remember to run `terraform destroy` when finished working.**
-    * [ ] **Output Configuration:** Output EC2 Public IP/DNS, S3 bucket name, ECR repo URI.
+    * [ ] **Deploy Infrastructure:** Run `terraform init`, `terraform plan`, `terraform apply`. Verify resource creation. **Remember to run `terraform destroy` when finished working.** *(User to perform. See `project_docs/terraform_guide.md`)*
+    * [ ] **Output Configuration:** Output EC2 Public IP/DNS, S3 bucket name, ECR repo URI. *(User to get from `terraform output` after apply. See `project_docs/terraform_guide.md`)*
 
 4.  **Tool Installation & Configuration on EC2:**
     * [ ] SSH into the provisioned EC2 instance. Verify Docker & Docker Compose are installed (via User Data or manual install).
