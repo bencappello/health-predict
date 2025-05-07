@@ -1,0 +1,2 @@
+- aws region: us-east-1
+- s3 bucket name: health-predict-mlops-f9ac6509
