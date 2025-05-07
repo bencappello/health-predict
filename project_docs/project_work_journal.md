@@ -158,3 +158,23 @@
 - Added logging to `scripts/split_data.py` to output the length of each generated dataset.
 - Re-ran the script and verified the output lengths in the logs, confirming the split logic.
 - Updated Step 6 in `project_steps.md` to use a standard Python script (`01_eda_baseline.py`) with notebook cell formatting (`# %%`) instead of an `.ipynb` file, to be edited and run within Cursor using the Jupyter extension connected to the `jupyterlab` Docker service.
+
+## $(date +'%Y-%m-%d %H:%M:%S') - Git Commits for Data Split Refinements & EDA Plan Update
+
+- **Commit 1 (docs):**
+  ```
+  docs: Update data split strategy and EDA plan
+
+  - Refine data split in project_plan.md and project_steps.md to use first 20% for initial model, rest for drift simulation.
+  - Update project_steps.md for EDA to use a Python script with notebook cells in Cursor, not a .ipynb file via web UI.
+  - Add JupyterLab service to docker-compose.yml.
+  - Update project_work_journal.md with these changes.
+  ```
+- **Commit 2 (feat):**
+  ```
+  feat: Update data splitting script and add EDA structure
+
+  - Modify split_data.py to log dataset lengths.
+  - Add notebooks/ directory for EDA script.
+  - Add data/ directory structure and .gitignore for CSVs in data/.
+  ```
