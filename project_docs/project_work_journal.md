@@ -61,3 +61,33 @@
   - Set `AIRFLOW__WEBSERVER__WORKERS=2` in `docker-compose.yml` for the `airflow-webserver` to stabilize its startup.
 - User confirmed MLflow UI (port 5000) and Airflow UI (port 8080 - after login) are now accessible.
 - Updated `project_steps.md`.
+
+## $(date +'%Y-%m-%d %H:%M:%S') - Git Commits for Docker Compose Setup
+
+- **Commit 1:**
+  ```
+  docs: Update progress and journal for Docker Compose setup
+
+  - Marked Docker Compose and UI verification tasks as complete in project_steps.md.
+  - Added detailed journal entry for Docker Compose setup, including troubleshooting steps for MLflow and Airflow.
+  ```
+- **Commit 2:**
+  ```
+  feat: Add Docker Compose setup for MLOps services
+
+  - Adds docker-compose.yml for Postgres, Airflow, and MLflow.
+  - Includes initial dags/, logs/, and plugins/ directories for Airflow.
+  - Configures MLflow to use Postgres backend and S3 for artifacts.
+  - Sets Airflow webserver workers to 2 for stability.
+  ```
+
+## $(date +'%Y-%m-%d %H:%M:%S') - Kubernetes Setup on EC2 (kubectl & Minikube)
+
+- Installed `kubectl` v1.28.5-eks-5e0fdde on the EC2 instance.
+- Attempted to install and start Minikube, but failed due to insufficient disk space (`GUEST_PROVISION_NOSPACE`).
+  - `df -h` confirmed root volume was ~7.6G with only ~1GB available.
+- User resized EC2 root EBS volume and restarted the instance (new IP: 54.226.87.176).
+- Successfully installed Minikube v1.35.0 and started a Kubernetes v1.32.0 cluster using the Docker driver.
+  - `kubectl` is now configured to use the "minikube" cluster.
+  - Noted a version skew warning between installed `kubectl` (v1.28.5) and Minikube's K8s server (v1.32.0).
+- Updated `project_steps.md`.

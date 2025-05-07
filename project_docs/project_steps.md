@@ -45,9 +45,9 @@
                 * Ensure `postgres` is listed under `depends_on`.
     * [x] Start services using `docker-compose up -d` in `~/mlops-services`. Check logs (`docker-compose logs -f`).
     * [x] Verify access to Airflow UI (port 8080) and MLflow UI (port 5000) via browser using EC2 public IP.
-    * [ ] **Install Local Kubernetes (Minikube/Kind):**
-        * [ ] Install `kubectl` on EC2.
-        * [ ] Install Minikube or Kind on EC2 following their official documentation. Start the cluster (e.g., `minikube start --driver=docker` or `kind create cluster`).
+    * [x] **Install Local Kubernetes (Minikube/Kind):**
+        * [x] Install `kubectl` on EC2.
+        * [x] Install Minikube or Kind on EC2 following their official documentation. Start the cluster (e.g., `minikube start --driver=docker` or `kind create cluster`).
 
 5.  **Data Preparation & Storage:** (No changes needed here, uses S3)
     * [ ] Download dataset.
