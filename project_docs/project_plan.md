@@ -5,7 +5,8 @@ Develop and deploy a robust, end-to-end Machine Learning Operations (MLOps) syst
 
 **2. Core Strategy:**
 * **MLOps Focus:** Prioritize demonstrating the complete MLOps workflow: data management, scalable training (HPO), experiment tracking, model packaging, automated deployment (CI/CD), API serving, model monitoring, and automated retraining.
-* **Drift Simulation:** Leverage the dataset's time dimension to simulate incoming production data batches, implement monitoring for both data and concept drift, and automate model retraining based on drift detection. Visualize drift and retraining events over time.
+* **Drift Simulation:** Leverage the dataset's time dimension (or row order as a proxy if no timestamp exists) to simulate incoming production data batches, implement monitoring for both data and concept drift, and automate model retraining based on drift detection. Visualize drift and retraining events over time.
+  * **Explicitly partition the dataset:** Separate the initial portion (e.g., first 20%) for baseline model training/validation/testing, preserving the remainder to simulate future data arrival.
 * **Cost-Optimized AWS Integration:** Utilize core AWS services (EC2, S3, ECR) for essential infrastructure. **Run Kubernetes (Minikube/Kind) and PostgreSQL (Docker container) directly on the EC2 instance** to minimize costs associated with managed services (EKS, RDS).
 * **Infrastructure as Code (IaC):** Employ Terraform (or AWS CDK) to define, provision, and manage the core AWS infrastructure (VPC, EC2, S3, ECR, IAM), showcasing modern cloud management.
 * **Aggressive Resource Management:** Emphasize the critical importance of **stopping EC2 instances and destroying infrastructure (`terraform destroy`)** when not actively working to stay within budget.
