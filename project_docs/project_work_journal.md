@@ -91,3 +91,70 @@
   - `kubectl` is now configured to use the "minikube" cluster.
   - Noted a version skew warning between installed `kubectl` (v1.28.5) and Minikube's K8s server (v1.32.0).
 - Updated `project_steps.md`.
+
+## $(date +'%Y-%m-%d %H:%M:%S') - Git Commits for Kubernetes Setup & Config Variables
+
+- **Commit 1 (build):**
+  ```
+  build: Ignore kubectl binary in mlops-services
+
+  - Prevents the downloaded kubectl binary from being tracked by Git.
+  ```
+- **Commit 2 (docs):**
+  ```
+  docs: Update progress and journal for Kubernetes setup
+
+  - Marked kubectl and Minikube installation as complete in project_steps.md.
+  - Added journal entry detailing Kubernetes setup on EC2, including disk space troubleshooting and resolution.
+  ```
+- **Commit 3 (feat):**
+  ```
+  feat: Add config_variables.md for project settings
+
+  - Includes initial variables like AWS region and S3 bucket name.
+  ```
+
+## $(date +'%Y-%m-%d %H:%M:%S') - Data Preparation & Splitting
+
+- User confirmed dataset (`diabetic_data.csv`) downloaded to `data/` directory on EC2.
+- Installed AWS CLI (`sudo apt install awscli -y`) as it was missing.
+- Uploaded `data/diabetic_data.csv` to `s3://health-predict-mlops-f9ac6509/raw_data/diabetic_data.csv` using AWS CLI.
+- Created data splitting script `scripts/split_data.py`:
+  - Uses `argparse` for configuration.
+  - Uses `boto3` to download raw data from S3 and upload processed splits.
+  - Uses `pandas` and `scikit-learn` for data handling and train/validation/test splitting (70/15/15 split).
+- Installed required Python packages (`pip install boto3 pandas scikit-learn`) after installing `pip` (`sudo apt install python3-pip -y`).
+- Ran `python3 scripts/split_data.py --bucket-name health-predict-mlops-f9ac6509`.
+- Confirmed successful execution and upload of `train.csv`, `validation.csv`, `test.csv` to `s3://health-predict-mlops-f9ac6509/processed_data/`.
+- Updated `project_steps.md`.
+
+## $(date +'%Y-%m-%d %H:%M:%S') - Add JupyterLab Service for EDA
+
+- Added a `jupyterlab` service definition to `mlops-services/docker-compose.yml`.
+  - Uses `jupyter/scipy-notebook:latest` image.
+  - Installs `boto3` on startup for S3 access.
+  - Maps host port 8888 to container port 8888.
+  - Mounts the project root (`../`) to `/home/jovyan/work` in the container.
+  - Configured to start JupyterLab listening on `0.0.0.0` with no token/password.
+- Updated Step 6 in `project_steps.md` to reflect using the JupyterLab service for EDA.
+- Preparing to start services including JupyterLab.
+
+## $(date +'%Y-%m-%d %H:%M:%S') - Refine Data Splitting Strategy for Drift Simulation
+
+- Revised data splitting plan to support drift simulation:
+  - Use the first 20% of the dataset as 'initial data' for baseline model training.
+  - Preserve the remaining 80% as 'future data' to simulate incoming batches.
+- Updated `project_plan.md` Core Strategy section to reflect this partitioning.
+- Updated `project_steps.md` Step 5 (Data Prep) and Step 6 (EDA) to reflect the new logic and filenames (`initial_train.csv`, `initial_validation.csv`, `initial_test.csv`, `future_data.csv`).
+- Modified `scripts/split_data.py`:
+  - Added logic to separate initial vs. future data based on `initial_data_fraction`.
+  - Applied train/validation/test split only to the initial data portion.
+  - Updated arguments and logic to save all four resulting datasets to S3.
+- Re-ran the modified `scripts/split_data.py` successfully.
+- Processed data (initial splits + future data) is now available in `s3://health-predict-mlops-f9ac6509/processed_data/`.
+
+## $(date +'%Y-%m-%d %H:%M:%S') - Finalize Data Split & Update EDA Plan
+
+- Added logging to `scripts/split_data.py` to output the length of each generated dataset.
+- Re-ran the script and verified the output lengths in the logs, confirming the split logic.
+- Updated Step 6 in `project_steps.md` to use a standard Python script (`01_eda_baseline.py`) with notebook cell formatting (`# %%`) instead of an `.ipynb` file, to be edited and run within Cursor using the Jupyter extension connected to the `jupyterlab` Docker service.

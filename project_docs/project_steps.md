@@ -49,22 +49,28 @@
         * [x] Install `kubectl` on EC2.
         * [x] Install Minikube or Kind on EC2 following their official documentation. Start the cluster (e.g., `minikube start --driver=docker` or `kind create cluster`).
 
-5.  **Data Preparation & Storage:** (No changes needed here, uses S3)
-    * [ ] Download dataset.
-    * [ ] Upload raw data to S3.
-    * [ ] Create and run data splitting script (`/scripts/split_data.py`) to save processed/batched data to S3.
+5.  **Data Preparation & Storage:** (Using first 20% for initial training, rest for simulation)
+    * [x] Download dataset.
+    * [x] Upload raw data to S3 (`raw_data/diabetic_data.csv`).
+    * [x] Modify and run data splitting script (`/scripts/split_data.py`):
+        * [x] Separate first 20% of data as `initial_data`.
+        * [x] Split `initial_data` into train/validation/test sets (e.g., 70/15/15 of the 20%).
+        * [x] Save `initial_train.csv`, `initial_validation.csv`, `initial_test.csv` to `processed_data/` prefix in S3.
+        * [x] Save the remaining 80% of data as `future_data.csv` to `processed_data/` prefix in S3.
 
-6.  **Initial EDA & Baseline Model:** (Can be done on EC2 or locally)
-    * [ ] Create Jupyter Notebook (`/notebooks/01_eda_baseline.ipynb`).
-    * [ ] **In Notebook:**
-        * [ ] Configure `boto3` (uses EC2 role if run on EC2, local credentials if run locally) to access S3.
-        * [ ] Load initial training data from S3.
-        * [ ] Perform EDA and visualization.
-        * [ ] Perform cleaning and basic feature engineering.
-        * [ ] Train baseline model (e.g., `LogisticRegression`).
-        * [ ] Evaluate model on test set.
-        * [ ] Document observations.
-    * [ ] Commit notebook and script changes to Git. **Remember to stop the EC2 instance if not actively using it.**
+6.  **Initial EDA & Baseline Model:** (Using Python Script with Notebook Cells in Cursor)
+    * [ ] Ensure the JupyterLab service is running via `docker-compose ps` (provides kernel).
+    * [ ] Create Python script (`/notebooks/01_eda_baseline.py`) with notebook-style cells (e.g., using `# %%` delimiter).
+    * [ ] Connect Cursor's Jupyter extension to the running Jupyter kernel (`http://localhost:8888`).
+    * [ ] **In Script Cells:**
+        * [ ] Configure `boto3` (should automatically use EC2 instance role credentials).
+        * [ ] Load initial training data from S3 (`processed_data/initial_train.csv`).
+        * [ ] Perform EDA and visualization on the initial training data.
+        * [ ] Perform cleaning and basic feature engineering (based on initial data).
+        * [ ] Train baseline model (e.g., `LogisticRegression`) on the initial training data.
+        * [ ] Evaluate model on the initial test set (`processed_data/initial_test.csv`).
+        * [ ] Document observations (in markdown cells: `# %% [markdown]`).
+    * [ ] Commit script changes to Git. **Remember to stop the EC2 instance if not actively using it.**
 
 **Phase 2: Scalable Training & Tracking on AWS (Weeks 3-4)**
 
