@@ -154,9 +154,13 @@ override.tf
 override.tf.json
 *_override.tf
 *_override.tf.json
+*.tfstate.d/
 
 # Secrets
 secrets.yaml
 secrets.yml
 *.pem
-*.key 
+*.key
+
+# MLOps services binaries (if downloaded into the repo)
+mlops-services/kubectl 
