@@ -44,3 +44,20 @@
   - SSH into the EC2 instance.
   - Crucially, run `terraform destroy` to manage costs.
 - Updated `project_steps.md` to reflect these initial IaC tasks and point to the guide.
+
+## $(date +'%Y-%m-%d %H:%M:%S') - Docker Compose Setup on EC2 (Airflow & MLflow)
+
+- Created `~/health-predict/mlops-services/` directory on EC2 for Docker Compose files.
+- Created `docker-compose.yml` in `~/health-predict/mlops-services/` for Postgres, Airflow (webserver, scheduler, init), and MLflow.
+  - Ensured `AIRFLOW_UID` is set for correct file permissions.
+  - Configured MLflow to use the Postgres backend and an S3 artifact root (placeholder `your-mlflow-s3-bucket` initially, user updated to actual bucket `health-predict-mlops-f9ac6509`).
+- Created `dags/`, `logs/`, `plugins/` subdirectories within `mlops-services/` for Airflow volume mounts.
+- Addressed initial `KeyError: 'ContainerConfig'` by running `docker-compose down --volumes` before `up -d`.
+- **Troubleshooting MLflow:**
+  - Resolved `ModuleNotFoundError: No module named 'psycopg2'` for MLflow by modifying its `command` in `docker-compose.yml` to `pip install psycopg2-binary` before starting the server.
+- **Troubleshooting Airflow Webserver:**
+  - Addressed Gunicorn timeout errors (`No response from gunicorn master within 120 seconds`).
+  - Checked `docker stats` for resource usage.
+  - Set `AIRFLOW__WEBSERVER__WORKERS=2` in `docker-compose.yml` for the `airflow-webserver` to stabilize its startup.
+- User confirmed MLflow UI (port 5000) and Airflow UI (port 8080 - after login) are now accessible.
+- Updated `project_steps.md`.

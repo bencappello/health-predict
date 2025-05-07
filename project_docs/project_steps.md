@@ -15,23 +15,23 @@
     * [ ] **Action:** Set up AWS Budgets and billing alerts for cost control (e.g., target < $30). *(Skipped for now)*
 
 3.  **Infrastructure as Code (IaC - Terraform/CDK):**
-    * [ ] Initialize Terraform/CDK project in the `/iac` directory. *(Terraform files created, user to init/plan/apply. See `project_docs/terraform_guide.md`)*
-    * [ ] **Write IaC Scripts:** Define resources for: *(Initial scripts created for VPC, Subnet, IGW, SG, IAM, EC2, S3, ECR. See `project_docs/terraform_guide.md` for customization and deployment)*
-        * [ ] VPC, **Public Subnet(s)**, Internet Gateway. *(Initial script created)*
-        * [ ] Security Groups (for EC2 - allow SSH, Airflow UI, MLflow UI, API port from your IP; allow necessary egress). *(Initial script created)*
-        * [ ] IAM Roles & Policies (for EC2 Instance Profile allowing S3, ECR access). *(Initial script created)*
-        * [ ] EC2 Instance (Choose **Free Tier eligible** type like `t2.micro` or `t3.micro` if possible, ensure sufficient RAM/CPU for Docker, Airflow, MLflow, DB, K8s). Configure User Data to install Docker, Docker Compose, Git. *(Initial script created)*
-        * [ ] S3 Bucket (for data, MLflow artifacts, reports - enable versioning). *(Initial script created)*
-        * [ ] ECR Repository (for the model API Docker image). *(Initial script created)*
-        * *(Remove RDS Instance definition)*.
-        * *(Remove EKS Cluster & Node Group definitions)*.
-    * [ ] **Deploy Infrastructure:** Run `terraform init`, `terraform plan`, `terraform apply`. Verify resource creation. **Remember to run `terraform destroy` when finished working.** *(User to perform. See `project_docs/terraform_guide.md`)*
-    * [ ] **Output Configuration:** Output EC2 Public IP/DNS, S3 bucket name, ECR repo URI. *(User to get from `terraform output` after apply. See `project_docs/terraform_guide.md`)*
+    * [x] Initialize Terraform/CDK project in the `/iac` directory. *(Terraform files created, user to init/plan/apply. See `project_docs/terraform_guide.md`)*
+    * [x] **Write IaC Scripts:** Define resources for: *(Initial scripts created for VPC, Subnet, IGW, SG, IAM, EC2, S3, ECR. See `project_docs/terraform_guide.md` for customization and deployment)*
+        * [x] VPC, **Public Subnet(s)**, Internet Gateway. *(Initial script created)*
+        * [x] Security Groups (for EC2 - allow SSH, Airflow UI, MLflow UI, API port from your IP; allow necessary egress). *(Initial script created)*
+        * [x] IAM Roles & Policies (for EC2 Instance Profile allowing S3, ECR access). *(Initial script created)*
+        * [x] EC2 Instance (Choose **Free Tier eligible** type like `t2.micro` or `t3.micro` if possible, ensure sufficient RAM/CPU for Docker, Airflow, MLflow, DB, K8s). Configure User Data to install Docker, Docker Compose, Git. *(Initial script created)*
+        * [x] S3 Bucket (for data, MLflow artifacts, reports - enable versioning). *(Initial script created)*
+        * [x] ECR Repository (for the model API Docker image). *(Initial script created)*
+        * [x] *(Remove RDS Instance definition)*.
+        * [x] *(Remove EKS Cluster & Node Group definitions)*.
+    * [x] **Deploy Infrastructure:** Run `terraform init`, `terraform plan`, `terraform apply`. Verify resource creation. **Remember to run `terraform destroy` when finished working.** *(User to perform. See `project_docs/terraform_guide.md`)*
+    * [x] **Output Configuration:** Output EC2 Public IP/DNS, S3 bucket name, ECR repo URI. *(User to get from `terraform output` after apply. See `project_docs/terraform_guide.md`)*
 
 4.  **Tool Installation & Configuration on EC2:**
-    * [ ] SSH into the provisioned EC2 instance. Verify Docker & Docker Compose are installed (via User Data or manual install).
-    * [ ] Create a directory for docker compose files (e.g., `~/mlops-services`).
-    * [ ] **Create `docker-compose.yml` in `~/mlops-services`:**
+    * [x] SSH into the provisioned EC2 instance. Verify Docker & Docker Compose are installed (via User Data or manual install).
+    * [x] Create a directory for docker compose files (e.g., `~/mlops-services`).
+    * [x] **Create `docker-compose.yml` in `~/mlops-services`:**
         * Define services for:
             * `postgres`: Use official `postgres` image. Set POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_DB env vars. Mount a Docker volume for persistence (`pgdata:/var/lib/postgresql/data`).
             * `airflow-webserver`, `airflow-scheduler`, `airflow-init`: Use official `apache/airflow` image.
@@ -43,8 +43,8 @@
             * `mlflow`: Use official `ghcr.io/mlflow/mlflow` image.
                 * Command: `mlflow server --host 0.0.0.0 --port 5000 --backend-store-uri postgresql://user:password@postgres:5432/mlflowdb --default-artifact-root s3://your-mlflow-s3-bucket/` (Ensure MLflow DB user/pass are set and DB exists in Postgres, or use separate DB).
                 * Ensure `postgres` is listed under `depends_on`.
-    * [ ] Start services using `docker-compose up -d` in `~/mlops-services`. Check logs (`docker-compose logs -f`).
-    * [ ] Verify access to Airflow UI (port 8080) and MLflow UI (port 5000) via browser using EC2 public IP.
+    * [x] Start services using `docker-compose up -d` in `~/mlops-services`. Check logs (`docker-compose logs -f`).
+    * [x] Verify access to Airflow UI (port 8080) and MLflow UI (port 5000) via browser using EC2 public IP.
     * [ ] **Install Local Kubernetes (Minikube/Kind):**
         * [ ] Install `kubectl` on EC2.
         * [ ] Install Minikube or Kind on EC2 following their official documentation. Start the cluster (e.g., `minikube start --driver=docker` or `kind create cluster`).
