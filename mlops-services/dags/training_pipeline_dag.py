@@ -55,6 +55,17 @@ with DAG(
     run_training_script = BashOperator(
         task_id="run_training_and_hpo",
         bash_command=f"""
+            echo '--- DIAGNOSTICS START ---'
+            echo 'Running as user: $(id)'
+            echo 'Current directory: $(pwd)'
+            echo 'Listing /home/ubuntu:'
+            ls -la /home/ubuntu || echo "Failed to list /home/ubuntu"
+            echo 'Listing /home/ubuntu/health-predict:'
+            ls -la /home/ubuntu/health-predict || echo "Failed to list /home/ubuntu/health-predict"
+            echo 'Listing /home/ubuntu/health-predict/mlops-services:'
+            ls -la /home/ubuntu/health-predict/mlops-services || echo "Failed to list /home/ubuntu/health-predict/mlops-services"
+            echo '--- DIAGNOSTICS END ---'
+
             echo 'Airflow task running in: $(pwd)'
             echo 'Attempting to execute training script via docker-compose...'
             cd {MLOPS_SERVICES_DIR_ON_HOST} && \

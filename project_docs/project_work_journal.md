@@ -313,3 +313,179 @@
   - Task `run_training_and_hpo` (`BashOperator`): Executes `scripts/train_model.py` inside the `jupyterlab` container using `docker-compose exec`. Passes necessary S3 paths, MLflow URI, and Ray Tune parameters.
   - Uses a distinct MLflow experiment name (`HealthPredict_Training_HPO_Airflow`) and Ray local directory for Airflow runs.
 - Updated `project_steps.md` to mark DAG file creation as complete.
+
+---
+date: 2025-05-08
+---
+
+## Session Summary
+
+**Goal:** Troubleshoot Airflow DAG `health_predict_training_hpo` failing to access `docker-compose.yml` via a host volume mount.
+
+**Outcome:** The same `cd: /home/ubuntu/health-predict/mlops-services: No such file or directory` error persisted after attempting to add the volume mount to `docker-compose.yml` for Airflow services. Modified the DAG's `BashOperator` command to include extensive diagnostic `ls` commands to inspect path visibility and permissions from within the Airflow container. Requested user to confirm `docker-compose` restart procedure, host directory permissions, and the exact content of the `docker-compose.yml` used by Docker.
+
+**Obstacles & Resolutions:**
+
+*   **Issue:** Airflow task logs continued to show `cd: /home/ubuntu/health-predict/mlops-services: No such file or directory` despite adding the volume mount `- /home/ubuntu/health-predict/mlops-services:/home/ubuntu/health-predict/mlops-services` to Airflow services in `mlops-services/docker-compose.yml`.
+*   **Investigation:** The error indicates the path is not accessible within the Airflow container (scheduler/worker).
+*   **Hypotheses:**
+    1.  Incorrect `docker-compose down/up` procedure (e.g., wrong directory, old file used).
+    2.  Permissions issue on the host directory `/home/ubuntu/health-predict/mlops-services` preventing access by the in-container user (UID 50000).
+    3.  The `docker-compose.yml` file on the host was not actually updated or not used by the `docker-compose up` command.
+*   **Troubleshooting Steps Taken:**
+    *   Modified `training_pipeline_dag.py` to add `id`, `pwd`, and several `ls -la` commands to the `BashOperator` to gather information about what the container environment sees for the specified paths.
+    *   Requested user to verify host-side configurations: exact restart steps, permissions of the host directory (`ls -ld`), and the content of the `docker-compose.yml` related to `airflow-scheduler` volume mounts (`cat ... | grep ...`).
+
+**Next Steps:** User to provide output from the diagnostic commands on the host and the new Airflow task logs with the enhanced DAG script. 
+
+---
+date: 2025-05-09
+---
+
+## Session Summary
+
+**Goal:** Resolve `TypeError: kwargs_from_env() got an unexpected keyword argument 'ssl_version'` error in Airflow DAG when calling `docker-compose exec`.
+
+**Outcome:** Identified the error as a Python package version mismatch between `docker-compose` and its `docker` library dependency within the Airflow worker containers. Updated `mlops-services/docker-compose.yml` to pin `docker` to version `5.0.3` and `docker-compose` to version `1.29.2` in the startup commands for `airflow-init`, `airflow-webserver`, and `airflow-scheduler` services.
+
+**Obstacles & Resolutions:**
+
+*   **Issue:** Airflow task log showed `TypeError: kwargs_from_env() got an unexpected keyword argument 'ssl_version'` when the `BashOperator` attempted to execute `docker-compose exec ...`.
+*   **Investigation:**
+    *   The diagnostic `ls` commands from the previous session confirmed that the target directory (`/home/ubuntu/health-predict/mlops-services`) and `docker-compose.yml` were accessible to the Airflow task.
+    *   The `TypeError` is a known issue caused by incompatible versions of the `docker-compose` Python package and the `docker` (or `docker-py`) Python library.
+    *   The Airflow services were installing `docker-compose` via `pip install docker-compose`, which likely pulled the latest version, but the `docker` library version in the base `apache/airflow:2.8.1` image or installed as another dependency was not compatible.
+*   **Resolution:**
+    *   Modified the `command` in `mlops-services/docker-compose.yml` for `airflow-init`, `airflow-webserver`, and `airflow-scheduler` services.
+    *   Changed `pip install docker-compose` to `pip install docker==5.0.3 docker-compose==1.29.2` to ensure compatible versions are used.
+
+**Next Steps:** User to rebuild and restart the Airflow Docker Compose services on the EC2 instance (`docker-compose down && docker-compose up -d --build airflow-init airflow-webserver airflow-scheduler`) and then re-run the `health_predict_training_hpo` DAG. 
+
+---
+date: 2025-05-09 (Continued)
+---
+
+## Session Summary
+
+**Goal:** Ensure all MLOps services are running correctly on EC2 after an unexpected instance restart, and that the Airflow DAG can execute the training script.
+
+**Outcome:** Successfully restarted all Docker Compose services in `~/health-predict/mlops-services` using `docker-compose up -d --build`. This ensures the previous fix (pinning `docker` and `docker-compose` versions in Airflow containers) is applied.
+
+**Obstacles & Resolutions:**
+
+*   **Issue:** The EC2 instance hosting the Dockerized MLOps services was unexpectedly restarted by the user.
+*   **Initial Action Attempt:** Attempted to run `docker-compose down && docker-compose up -d --build airflow-init airflow-webserver airflow-scheduler` from the `/home/ubuntu/health-predict` directory, which was incorrect as `docker-compose.yml` was not present there. Command failed silently in that context.
+*   **Corrected Action:** Changed directory to `~/health-predict/mlops-services` and executed `docker-compose up -d --build` to restart all services and apply the build changes to Airflow containers.
+
+**Next Steps:** User to verify all services (Airflow UI, MLflow UI, JupyterLab UI) are accessible and then re-run the `health_predict_training_hpo` DAG in the Airflow UI to confirm the `TypeError` is resolved and the training script executes successfully. 
+
+---
+date: 2025-05-09 (Continued II)
+---
+
+## Session Summary
+
+**Goal:** Resolve `KeyError: 'ContainerConfig'` during `docker-compose up` after an EC2 instance restart and apply fixes for Airflow DAG execution.
+
+**Outcome:** Successfully brought all MLOps services up by running `docker-compose down --volumes` followed by `docker-compose up -d --build` in the `~/health-predict/mlops-services` directory. This addressed the `KeyError: 'ContainerConfig'` and ensured the pinned `docker` and `docker-compose` versions were applied to Airflow containers.
+
+**Obstacles & Resolutions:**
+
+*   **Issue 1:** After EC2 restart, `docker-compose up -d --build` (intended to bring services up and apply Airflow package fixes) failed with `KeyError: 'ContainerConfig'` for Airflow services.
+*   **Investigation 1:** This error was previously encountered and resolved by using `docker-compose down --volumes` to clear potentially corrupt or inconsistent Docker volumes before restarting services.
+*   **Resolution 1:** Executed `cd ~/health-predict/mlops-services && docker-compose down --volumes && docker-compose up -d --build`. This sequence successfully started all services.
+
+**Next Steps:** User to verify all services (Airflow UI, MLflow UI, JupyterLab UI) are accessible and then re-run the `health_predict_training_hpo` DAG in the Airflow UI to confirm the `TypeError` (related to `kwargs_from_env`) is resolved and the training script executes successfully. 
+
+---
+date: 2025-05-09 (Continued III)
+---
+
+## Session Summary
+
+**Goal:** Troubleshoot and resolve issues preventing MLOps service UIs (Airflow, MLflow, JupyterLab) from being accessible after multiple restarts and configuration changes.
+
+**Outcome:** Successfully started all Docker Compose services (`airflow-init` completed, `airflow-webserver`, `airflow-scheduler`, `mlflow`, `postgres`, `jupyterlab` are Up and Healthy). Identified and resolved several issues including `KeyError: 'ContainerConfig'`, `pip` install hangs, and `jsonschema` dependency conflicts within Airflow containers.
+
+**Obstacles & Resolutions:**
+
+*   **Issue 1:** User reported UIs were inaccessible.
+*   **Investigation 1:** Checked `docker-compose ps`, logs for `airflow-webserver`, `airflow-init`, and `jupyterlab`. Identified `jsonschema` dependency conflict caused by pinning `docker` and `docker-compose` versions.
+*   **Resolution 1:** Modified Airflow service commands in `docker-compose.yml` to explicitly upgrade `jsonschema` after installing pinned `docker`/`docker-compose` versions. Ran `docker-compose down --volumes && docker-compose up -d --build`.
+*   **Issue 2:** `airflow-init` container appeared stuck during `pip install --upgrade pip` or subsequent `pip install` commands, preventing initialization from completing.
+*   **Investigation 2:** Simplified `airflow-init` command progressively. Found that `bash -c "..."` command chain wasn't executing fully. Confirmed basic command execution worked with `echo`. Also confirmed the `KeyError: 'ContainerConfig'` requires `docker-compose down --volumes` to resolve reliably before `up`.
+*   **Resolution 2:** Restored the full `airflow-init` command (installing pinned `docker`/`docker-compose`, upgrading `jsonschema`, running `airflow db init`, `airflow users create`), removing the problematic initial `pip install --upgrade pip`. Ran `docker-compose down --volumes && docker-compose up -d --build`.
+*   **Issue 3:** `jupyterlab` container was initially `Up (unhealthy)`.
+*   **Investigation 3:** Logs showed extensive `pip install` from `requirements-training.txt` was running. Subsequent check showed the container became `Up (healthy)` after installations completed.
+
+**Next Steps:** User to verify all services (Airflow UI, MLflow UI, JupyterLab UI) are accessible in the browser and then re-run the `health_predict_training_hpo` DAG in the Airflow UI to confirm the original `TypeError` (related to `kwargs_from_env`) is resolved and the training script executes successfully.
+
+---
+date: 2025-05-09 (Continued IV)
+---
+
+## Session Summary
+
+**Goal:** Resolve issue preventing MLflow UI from being accessible.
+
+**Outcome:** Successfully diagnosed and fixed the MLflow issue. Identified that the `mlflowdb` database was not being created in Postgres, causing MLflow connection errors. Created an init script (`init-mlflow-db.sh`) for Postgres to create the database and mounted it via `docker-compose.yml`. After resolving a subsequent heredoc syntax error in the init script (by switching to `psql -c`), all services (Postgres, MLflow, Airflow web/scheduler, JupyterLab) were successfully started and confirmed via `docker-compose ps` and log checks.
+
+**Obstacles & Resolutions:**
+
+*   **Issue 1:** MLflow UI inaccessible. Logs showed `FATAL: database "mlflowdb" does not exist`.
+*   **Resolution 1:** Created `mlops-services/init-mlflow-db.sh` to run `CREATE DATABASE mlflowdb;` using `psql`. Mounted this script into `/docker-entrypoint-initdb.d/` in the `postgres` service definition in `docker-compose.yml`. Required `docker-compose down --volumes` before `up -d --build` for the init script to run.
+*   **Issue 2:** Postgres failed to start after adding the init script. Logs showed `ERROR: syntax error at or near "EOSQL"` due to incorrect heredoc termination in the init script.
+*   **Resolution 2:** Corrected `init-mlflow-db.sh` multiple times, eventually switching from a heredoc to `psql -c "CREATE DATABASE mlflowdb;"` to avoid syntax issues. Ran `docker-compose down --volumes && docker-compose up -d --build` again.
+*   **Confirmation:** Verified Postgres logs showed successful execution of the init script (`CREATE DATABASE`). Verified MLflow logs showed successful connection, database migration, and server startup.
+
+**Next Steps:** User confirmed Airflow and JupyterLab UIs are working but MLflow UI was not. After fixing the MLflow database issue, the user is to re-verify all three UIs (Airflow, MLflow, JupyterLab) are accessible. If they are, the user will trigger the `health_predict_training_hpo` DAG in Airflow.
+
+---
+date: 2025-05-09 (Continued V)
+---
+
+## Session Summary
+
+**Goal:** Resolve issue preventing Airflow UI from being accessible after MLflow was fixed.
+
+**Outcome:** Identified that `airflow-init` was no longer running `airflow db init` after being reverted to the default Docker image entrypoint in a previous step. Reverted `airflow-init` in `docker-compose.yml` to use a custom `entrypoint` and `command` that explicitly runs `airflow db init && airflow users create ...` (without any pip installs). This allowed `airflow-init` to complete successfully and the `airflow-webserver` to start without the "database not initialized" error. The `jsonschema` version conflict warning persists in `airflow-webserver` logs but does not prevent startup.
+
+**Obstacles & Resolutions:**
+
+*   **Issue:** User reported Jupyter and MLflow UIs working, but Airflow UI was not.
+*   **Investigation:**
+    *   `docker-compose ps` showed `airflow-webserver` and `airflow-scheduler` were `Up`.
+    *   `airflow-webserver` logs showed `ERROR: You need to initialize the database. Please run airflow db init`.
+    *   This indicated that the `airflow-init` service, which was previously configured to use the base image's default entrypoint (and was exiting with code 2), was not successfully initializing the database for the other Airflow components.
+*   **Resolution:**
+    *   Modified `mlops-services/docker-compose.yml` for the `airflow-init` service:
+        *   Restored `entrypoint: /bin/bash`.
+        *   Set `command: -c "airflow db init && airflow users create --username admin --password admin --firstname Anonymous --lastname User --role Admin --email admin@example.com"`. This command omits the problematic `pip install` steps that were causing it to hang previously, focusing only on database initialization and user creation.
+    *   The `airflow-webserver` and `airflow-scheduler` services retain their commands to install `docker==5.0.3`, `docker-compose==1.29.2`, and `jsonschema>=4.18.0`.
+    *   Ran `docker-compose down --volumes && docker-compose up -d --build`.
+    *   Verified `airflow-init` completed with `Exit 0` and its logs showed successful DB init and user creation.
+    *   Verified `airflow-webserver` logs no longer showed the DB initialization error and that the `jsonschema` conflict was present but not fatal.
+
+**Next Steps:** User to test the Airflow UI. If accessible, then test the `health_predict_training_hpo` DAG execution.
+
+---
+date: 2025-05-09 (Continued VI)
+---
+
+## Session Summary
+
+**Goal:** Resolve `PermissionError: [Errno 13] Permission denied` when Airflow DAG task attempts to run `docker-compose exec`.
+
+**Outcome:** Successfully resolved the permission error and ran the Airflow DAG. The error was caused by the Airflow container user (UID 50000) lacking permission to access the Docker socket (`/var/run/docker.sock`) mounted from the host. Added the host's Docker group GID (`998`, obtained via `getent group docker`) to the `group_add` section for the `airflow-webserver` and `airflow-scheduler` services in `docker-compose.yml`. After restarting services, the DAG ran successfully, executing the training script via `docker-compose exec` without permission errors.
+
+**Obstacles & Resolutions:**
+
+*   **Issue:** Airflow DAG task failed with `PermissionError: [Errno 13] Permission denied` when trying to connect to the Docker socket via `docker-compose` (specifically within the `docker` Python library).
+*   **Investigation:** Confirmed the Docker socket volume mount existed in `docker-compose.yml`. Identified the cause as the Airflow user inside the container not belonging to the group that owns the Docker socket on the host.
+*   **Resolution:**
+    1.  Obtained the GID of the `docker` group on the host EC2 instance (`getent group docker | cut -d: -f3` resulted in `998`).
+    2.  Added `group_add: ["998"]` to the `airflow-webserver` and `airflow-scheduler` service definitions in `mlops-services/docker-compose.yml`.
+    3.  Ran `docker-compose down --volumes && docker-compose up -d --build`.
+    4.  User re-ran the DAG, which completed successfully.
+
+**Next Steps:** The Airflow DAG is now operational. The MLOps stack (Postgres, Airflow, MLflow, JupyterLab) is fully functional.

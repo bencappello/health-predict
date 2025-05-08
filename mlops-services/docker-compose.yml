@@ -9,6 +9,7 @@ services:
       - POSTGRES_DB=airflowdb
     volumes:
       - pgdata:/var/lib/postgresql/data
+      - ./init-mlflow-db.sh:/docker-entrypoint-initdb.d/init-mlflow-db.sh
     ports:
       - "5432:5432"
 
@@ -27,9 +28,11 @@ services:
       - ./logs:/opt/airflow/logs
       - ./plugins:/opt/airflow/plugins
       - /var/run/docker.sock:/var/run/docker.sock # Mount docker socket
+      - /home/ubuntu/health-predict/mlops-services:/home/ubuntu/health-predict/mlops-services # Mount host mlops-services dir
       # - ./config:/opt/airflow/config # If you have custom airflow.cfg
+    # Restore custom entrypoint/command, but ONLY run airflow commands
     entrypoint: /bin/bash
-    command: -c "pip install docker-compose && airflow db init && airflow users create --username admin --password admin --firstname Anonymous --lastname User --role Admin --email admin@example.com"
+    command: -c "airflow db init && airflow users create --username admin --password admin --firstname Anonymous --lastname User --role Admin --email admin@example.com"
 
   airflow-webserver:
     image: apache/airflow:2.8.1
@@ -44,6 +47,7 @@ services:
       - ./logs:/opt/airflow/logs
       - ./plugins:/opt/airflow/plugins
       - /var/run/docker.sock:/var/run/docker.sock # Mount docker socket
+      - /home/ubuntu/health-predict/mlops-services:/home/ubuntu/health-predict/mlops-services # Mount host mlops-services dir
       # - ./config:/opt/airflow/config
     environment:
       - AIRFLOW__CORE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@postgres:5432/airflowdb
@@ -51,8 +55,10 @@ services:
       - AIRFLOW__WEBSERVER__WORKERS=2 # Explicitly set Gunicorn workers
       # - AIRFLOW__CORE__LOAD_EXAMPLES=False
       # - AIRFLOW__WEBSERVER__EXPOSE_CONFIG=True
+    group_add:
+      - "998"
     command: >
-      bash -c "pip install docker-compose && airflow webserver"
+      bash -c "pip install docker==5.0.3 docker-compose==1.29.2 && pip install --upgrade jsonschema>=4.18.0 && airflow webserver"
 
   airflow-scheduler:
     image: apache/airflow:2.8.1
@@ -65,13 +71,16 @@ services:
       - ./logs:/opt/airflow/logs
       - ./plugins:/opt/airflow/plugins
       - /var/run/docker.sock:/var/run/docker.sock # Mount docker socket
+      - /home/ubuntu/health-predict/mlops-services:/home/ubuntu/health-predict/mlops-services # Mount host mlops-services dir
       # - ./config:/opt/airflow/config
     environment:
       - AIRFLOW__CORE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@postgres:5432/airflowdb
       - AIRFLOW__CORE__EXECUTOR=LocalExecutor
       # - AIRFLOW__CORE__LOAD_EXAMPLES=False
+    group_add:
+      - "998"
     command: >
-      bash -c "pip install docker-compose && airflow scheduler"
+      bash -c "pip install docker==5.0.3 docker-compose==1.29.2 && pip install --upgrade jsonschema>=4.18.0 && airflow scheduler"
 
   mlflow:
     image: ghcr.io/mlflow/mlflow:v2.11.3 # Use a specific version

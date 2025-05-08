@@ -95,8 +95,8 @@
     * [ ] Task 1: Optional data split.
     * [ ] Task 2 (`BashOperator`/`PythonOperator`):** Execute `train_model.py`. Pass MLflow tracking URI pointing to the MLflow container on EC2 (e.g., `http://<mlflow-service-name>:5000` or `http://localhost:5000` depending on network mode/execution context). Ensure EC2 role allows S3 access.
     * [ ] Task 3: Use MLflow client API to find and register the best model in MLflow Model Registry.
-    * [ ] Upload DAG file to the mounted `/dags` directory on EC2.
-    * [ ] Test DAG execution. Verify results in MLflow UI (artifacts on S3, metadata in local Postgres).
+    * [x] Upload DAG file to the mounted `/dags` directory on EC2.
+    * [x] Test DAG execution. Verify results in MLflow UI (artifacts on S3, metadata in local Postgres).
 
 **Phase 3: API Development & Deployment to Local K8s (Weeks 5-6)**
 
