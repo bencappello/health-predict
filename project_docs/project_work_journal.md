@@ -178,3 +178,115 @@
   - Add notebooks/ directory for EDA script.
   - Add data/ directory structure and .gitignore for CSVs in data/.
   ```
+
+## $(date +'%Y-%m-%d %H:%M:%S') - Completed Initial EDA and Baseline Model Development
+- Developed `notebooks/01_eda_baseline.py` containing:
+    - Loading of initial training, validation, and test data from S3.
+    - Detailed EDA:
+        - Initial data inspection (.info(), .describe(), missing values).
+        - Target variable analysis (`readmitted`).
+        - Numerical feature histograms and boxplots.
+        - Categorical feature barplots.
+    - Data Cleaning and Preprocessing:
+        - Replaced '?' with NaN.
+        - Dropped columns with high missing percentages (`weight`, `payer_code`, `medical_specialty`).
+        - Filled remaining NaNs in `race`, `diag_1`, `diag_2`, `diag_3` with 'Missing'.
+        - Filtered out rows where `discharge_disposition_id` indicated hospice or expired.
+    - Feature Engineering:
+        - Simplified `readmitted` to a binary target (`readmitted_binary`).
+        - Converted `age` to an ordinal feature (`age_ordinal`).
+        - Dropped original `readmitted`, `age`, `encounter_id`, `patient_nbr`, and `diag_1`, `diag_2`, `diag_3` (for baseline simplicity).
+    - Preprocessing for Modeling:
+        - Identified numerical and categorical features.
+        - Applied `StandardScaler` to numerical features and `OneHotEncoder` to categorical features using `ColumnTransformer`.
+        - Processed training, validation, and test sets using the fitted preprocessor.
+    - Baseline Model Training:
+        - Trained a Logistic Regression model with `class_weight='balanced'`.
+    - Model Evaluation:
+        - Evaluated the model on the test set using classification report, accuracy score, and confusion matrix.
+- Created a corresponding `notebooks/01_eda_baseline.ipynb` file.
+- Committed all changes to Git.
+- Updated `project_steps.md` to mark Phase 1, Step 6 as complete.
+
+## $(date +'%Y-%m-%d %H:%M:%S') - Updated Project Plan for Enhanced Model Experimentation
+
+- Updated `project_steps.md` (Phase 1, Step 6) to accurately reflect completion of EDA and baseline model tasks.
+- Revised `project_plan.md`:
+  - Modified 'Core Strategy' point 'Pragmatic Modeling' to emphasize exploring various ML models (Random Forest, XGBoost, etc.) and using RayTune for HPO.
+  - Updated 'Key Phases', Phase 2 (Scalable Training & Tracking on AWS) to detail experimentation with multiple model architectures and advanced HPO with RayTune.
+  - Added 'XGBoost' to 'Key Technologies'.
+- Revised `project_steps.md` (Phase 2, Step 2 - Training Script):
+  - Added task to experiment with various model architectures (Logistic Regression, Random Forest, XGBoost, LightGBM, CatBoost).
+  - Enhanced MLflow integration to log parameters, artifacts, metrics, and tags for each model and run.
+  - Emphasized using RayTune for comprehensive HPO across all selected model types with well-defined search spaces.
+  - Specified logging the best version of each model type.
+
+## $(date +'%Y-%m-%d %H:%M:%S') - Created Feature Engineering Pipeline Script
+
+- Created `src/feature_engineering.py` based on the EDA notebook (`notebooks/01_eda_baseline.py`).
+- The script includes functions for:
+  - `clean_data`: Handles '?', drops specified columns, fills NaNs, and filters by `discharge_disposition_id`.
+  - `engineer_features`: Creates binary target `readmitted_binary` and ordinal `age_ordinal`.
+  - `get_preprocessor`: Defines and returns a Scikit-learn `ColumnTransformer` for numerical (StandardScaler) and categorical (OneHotEncoder) features.
+  - `save_preprocessor` & `load_preprocessor`: Utility functions to save/load the fitted preprocessor using `joblib`.
+  - `preprocess_data`: Applies the preprocessor (fitting if necessary) and returns a transformed DataFrame.
+- Added an `if __name__ == '__main__':` block with example usage and basic tests for the functions.
+- Updated `project_steps.md` to mark Phase 2, Step 1 as complete.
+
+## $(date +'%Y-%m-%d %H:%M:%S') - Created and Refined Model Training Script
+
+- Developed `scripts/train_model.py` for model training, hyperparameter optimization with Ray Tune, and MLflow integration.
+- The script includes:
+  - Argument parsing for S3 data paths, MLflow URI, and Ray Tune parameters.
+  - Data loading from S3 and preprocessing using `src/feature_engineering.py`.
+  - Fitting and logging the data preprocessor to MLflow.
+  - HPO for Logistic Regression, Random Forest, and XGBoost models using Ray Tune.
+  - Logging of HPO trials (parameters, metrics) to MLflow.
+  - Training a final model using the best hyperparameters for each model type and logging these models and their metrics to MLflow.
+  - Models and artifacts are stored in S3 via MLflow's artifact logging.
+- Corrected a linter error in `scripts/train_model.py` related to accessing metrics from `best_trial.metrics`.
+- Updated `project_steps.md` to mark the script creation and refinement sub-tasks of Phase 2, Step 2 as complete.
+
+## $(date +'%Y-%m-%d %H:%M:%S') - Prepared for Model Training Execution
+
+- Updated `project_steps.md` for Phase 2, Step 2 to include explicit sub-tasks for executing the training script and verifying MLflow results.
+- Created `project_docs/run_training_guide.md` containing detailed step-by-step instructions for the user to run `scripts/train_model.py` on the EC2 instance. This guide includes prerequisites, dependency installation, command construction (with placeholders for EC2 IP), and steps for monitoring and verifying results in the MLflow UI.
+- The next action is for the user to follow this guide to execute the training script.
+
+## $(date +'%Y-%m-%d %H:%M:%S') - Dockerized Training Environment and Updated Guide
+
+- Created `scripts/requirements-training.txt` to define Python dependencies for the model training script.
+- Modified `mlops-services/docker-compose.yml` to update the `jupyterlab` service:
+  - The service now installs dependencies from `scripts/requirements-training.txt` upon startup.
+  - This makes the Python environment for training reproducible via Docker.
+- Updated `project_docs/run_training_guide.md` to reflect the new Docker-based execution method:
+  - Instructions now guide the user to run the training script using `docker-compose exec jupyterlab ...`.
+  - Clarified that dependency installation is handled by the Docker service build/startup.
+- The user is now ready to rebuild the Docker services and then run the training script as per the updated guide.
+
+## $(date +'%Y-%m-%d %H:%M:%S') - Executed Model Training and HPO Script
+
+- Successfully executed `scripts/train_model.py` within the `jupyterlab` Docker container.
+- Iteratively debugged the script:
+  - Corrected `FileNotFoundError` for `preprocessor.joblib` by ensuring the output directory for the preprocessor is created only if a directory path is specified (relevant if saving to current dir).
+  - Resolved Ray Tune `AttributeError: module 'ray.tune' has no attribute 'session'` by updating `RunConfig` imports and parameters (`local_dir` to `storage_path`). This was based on web search for Ray 2.7.0 API changes.
+  - Addressed Ray Tune `ObjectStoreFullError` by setting `max_concurrent_trials=1` in `TuneConfig`.
+  - Fixed `ValueError: could not convert string to float: 'Missing'` by explicitly defining numerical and categorical features in `scripts/train_model.py` before passing them to `get_preprocessor` in `src/feature_engineering.py`. Ensured `COLS_FILL_NA_MISSING` (including `diag_1`, `diag_2`, `diag_3`) were correctly identified and processed as categorical by the `OneHotEncoder`.
+  - Updated `tune.report` to `train.report` from `ray.train` to resolve deprecation errors that were halting trials.
+- The script completed HPO for Logistic Regression, Random Forest, and XGBoost models.
+- All trials for all models reported perfect validation scores (F1=1.0, AUC=1.0, etc.). This is highly indicative of data leakage or a feature that perfectly predicts the target. This needs further investigation, but the script execution and MLflow logging objectives are met.
+- Best models and their preprocessors were logged to MLflow.
+- Updated `project_steps.md` to mark Phase 2, Step 2 (training script execution and verification) as complete.
+
+## $(date +'%Y-%m-%d %H:%M:%S') - Corrected Data Leakage and Reran Training
+
+- Identified data leakage issue causing perfect (1.0) validation scores in previous run.
+  - The original categorical target column `readmitted` was being included in the features passed to the model after one-hot encoding.
+- Fixed the leakage in `scripts/train_model.py` by modifying the definition of `X_train_for_preprocessor_fitting` and `X_val_for_testing` to explicitly drop `readmitted` (and the original `age`) columns, in addition to the engineered target `readmitted_binary`.
+- Reran the training script (`docker-compose exec jupyterlab python3 scripts/train_model.py ...`).
+- The script completed successfully with realistic (non-perfect) validation scores:
+  - Logistic Regression best F1 ~0.27
+  - Random Forest best F1 ~0.28
+  - XGBoost best F1 ~0.07
+- Best models and preprocessors were logged to MLflow with the corrected results.
+- Phase 2, Step 2 is now properly completed.

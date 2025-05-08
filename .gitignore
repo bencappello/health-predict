@@ -166,4 +166,14 @@ secrets.yml
 mlops-services/kubectl
 
 # Data files
-/data/*.csv 
+/data/*.csv
+
+# Log files
+*.log
+logs/
+**logs/
+mlops-services/logs/
+
+# ML / Training Artifacts
+ray_results_hpo/
+*.joblib 
