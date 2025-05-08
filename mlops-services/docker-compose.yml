@@ -105,9 +105,10 @@ services:
       # - NOTEBOOK_ARGS="--NotebookApp.token='' --NotebookApp.password=''" # Alternative: Disable token/password - use with caution
     working_dir: /home/jovyan/work # Start in the project directory
     command: >
-      bash -c "pip install --quiet boto3 && \
+      bash -c "pip install --upgrade pip && \
+               pip install --no-cache-dir -r /home/jovyan/work/scripts/requirements-training.txt && \
                start-notebook.sh --NotebookApp.token='' --NotebookApp.password='' --NotebookApp.ip='0.0.0.0'"
-      # Installs boto3 and starts lab listening on all interfaces with no token/password
+      # Installs dependencies from requirements-training.txt and starts lab
     networks:
       - default # Connect to the same network as other services
 

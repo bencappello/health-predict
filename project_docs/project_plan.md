@@ -10,19 +10,19 @@ Develop and deploy a robust, end-to-end Machine Learning Operations (MLOps) syst
 * **Cost-Optimized AWS Integration:** Utilize core AWS services (EC2, S3, ECR) for essential infrastructure. **Run Kubernetes (Minikube/Kind) and PostgreSQL (Docker container) directly on the EC2 instance** to minimize costs associated with managed services (EKS, RDS).
 * **Infrastructure as Code (IaC):** Employ Terraform (or AWS CDK) to define, provision, and manage the core AWS infrastructure (VPC, EC2, S3, ECR, IAM), showcasing modern cloud management.
 * **Aggressive Resource Management:** Emphasize the critical importance of **stopping EC2 instances and destroying infrastructure (`terraform destroy`)** when not actively working to stay within budget.
-* **Pragmatic Modeling:** Use standard ML models suitable for tabular data; the focus is on the surrounding MLOps system.
+* **Pragmatic Modeling:** While the focus is on the MLOps system, explore various ML models (e.g., Logistic Regression, Random Forest, XGBoost) and utilize hyperparameter optimization (RayTune) to achieve robust predictive performance.
 * **Demonstrability:** Ensure the project is well-documented, reproducible (via IaC and scripts), and effectively showcased through documentation, visualizations, and potentially a video walkthrough, including clear setup/teardown instructions.
 
 **3. Key Phases:**
 * **Phase 1: Foundation, Cloud Setup & Exploration:** Provision core AWS infrastructure (VPC, EC2, S3, ECR) via IaC, set up MLOps tools (Airflow, MLflow, PostgreSQL) and local Kubernetes (Minikube/Kind) via Docker Compose on EC2, prepare data on S3, perform initial EDA, and establish baseline model.
-* **Phase 2: Scalable Training & Tracking on AWS:** Develop reusable feature engineering, implement scalable training with HPO (RayTune) on EC2, integrate comprehensive experiment tracking with MLflow (using S3 backend), and orchestrate initial training via Airflow (using local PostgreSQL backend).
-* **Phase 3: API Development & Deployment to Local K8s:** Develop a REST API (FastAPI/Flask) to serve the model, containerize the API, push the image to ECR, and deploy it to the local Kubernetes cluster (Minikube/Kind) running on the EC2 instance.
+* **Phase 2: Scalable Training & Tracking on AWS:** Develop reusable feature engineering, implement scalable training pipelines that experiment with multiple model architectures (e.g., Random Forest, XGBoost) and incorporate advanced hyperparameter optimization (RayTune) on EC2. Integrate comprehensive experiment tracking with MLflow (using S3 backend), and orchestrate training via Airflow (using local PostgreSQL backend).
+* **Phase 3: API Development & Deployment to Local K8s:** Develop a REST API (FastAPI/Flask) to serve the best performing model, containerize the API, push the image to ECR, and deploy it to the local Kubernetes cluster (Minikube/Kind) running on the EC2 instance.
 * **Phase 4: CI/CD Automation using AWS Resources:** Create an Airflow DAG to automate the build (Docker image) and deployment (to local K8s on EC2) process, triggered manually or after model retraining.
 * **Phase 5: Drift Monitoring & Retraining Loop on AWS:** Implement data and concept drift detection using Evidently, orchestrate a simulation loop in Airflow to process data batches, trigger retraining based on drift, and log metrics for visualization.
 * **Phase 6: Documentation, Finalization & AWS Showcase:** Create comprehensive documentation (README, architecture diagram, setup/teardown guides), generate drift visualizations, record a video walkthrough, ensure IaC code is clean, and package the project for submission.
 
 **4. Key Technologies:**
-* **Languages/Libraries:** Python, Pandas, Scikit-learn, Matplotlib/Seaborn
+* **Languages/Libraries:** Python, Pandas, Scikit-learn, Matplotlib/Seaborn, XGBoost
 * **MLOps Tools:** Airflow, MLflow, RayTune, Evidently AI
 * **API/Containerization:** FastAPI/Flask, Docker, Docker Compose
 * **Cloud/Deployment:** AWS (EC2, S3, ECR, VPC, IAM), Kubernetes (Minikube/Kind running on EC2), Terraform/AWS CDK

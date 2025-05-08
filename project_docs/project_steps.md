@@ -60,32 +60,35 @@
 
 6.  **Initial EDA & Baseline Model:** (Using Python Script with Notebook Cells in Cursor)
     * [ ] Ensure the JupyterLab service is running via `docker-compose ps` (provides kernel).
-    * [ ] Create Python script (`/notebooks/01_eda_baseline.py`) with notebook-style cells (e.g., using `# %%` delimiter).
+    * [x] Create Python script (`/notebooks/01_eda_baseline.py`) with notebook-style cells (e.g., using `# %%` delimiter).
     * [ ] Connect Cursor's Jupyter extension to the running Jupyter kernel (`http://localhost:8888`).
-    * [ ] **In Script Cells:**
-        * [ ] Configure `boto3` (should automatically use EC2 instance role credentials).
-        * [ ] Load initial training data from S3 (`processed_data/initial_train.csv`).
-        * [ ] Perform EDA and visualization on the initial training data.
-        * [ ] Perform cleaning and basic feature engineering (based on initial data).
-        * [ ] Train baseline model (e.g., `LogisticRegression`) on the initial training data.
-        * [ ] Evaluate model on the initial test set (`processed_data/initial_test.csv`).
-        * [ ] Document observations (in markdown cells: `# %% [markdown]`).
-    * [ ] Commit script changes to Git. **Remember to stop the EC2 instance if not actively using it.**
+    * [x] **In Script Cells:**
+        * [x] Configure `boto3` (should automatically use EC2 instance role credentials).
+        * [x] Load initial training data from S3 (`processed_data/initial_train.csv`).
+        * [x] Perform EDA and visualization on the initial training data.
+        * [x] Perform cleaning and basic feature engineering (based on initial data).
+        * [x] Train baseline model (e.g., `LogisticRegression`) on the initial training data.
+        * [x] Evaluate model on the initial test set (`processed_data/initial_test.csv`).
+        * [x] Document observations (in markdown cells: `# %% [markdown]`).
+    * [x] Commit script changes to Git.
 
 **Phase 2: Scalable Training & Tracking on AWS (Weeks 3-4)**
 
-1.  **Feature Engineering Pipeline:** (No changes needed here)
-    * [ ] Create script (`/src/feature_engineering.py`) with Scikit-learn pipelines and save/load functions.
+1.  **Feature Engineering Pipeline:**
+    * [x] Create script (`/src/feature_engineering.py`) with Scikit-learn pipelines and save/load functions.
 
 2.  **Training Script:**
-    * [ ] Create script (`/scripts/train_model.py`) using `argparse`.
-    * [ ] Load data from S3.
-    * [ ] Use `feature_engineering.py`.
-    * [ ] **Integrate MLflow:** Connect to MLflow server running on EC2 (use EC2's private IP or `localhost` if running script on EC2). Log params, transformer artifact (to S3 via MLflow), metrics.
-    * [ ] **Implement HPO (RayTune):** Run RayTune locally within the script process on the EC2 instance.
-    * [ ] Log model using `mlflow.sklearn.log_model()` (artifacts go to S3).
+    * [x] Create script (`/scripts/train_model.py`) using `argparse`.
+    * [x] Load data from S3.
+    * [x] Use `feature_engineering.py`.
+    * [x] **Experiment with Model Architectures:** Implement and evaluate various models (e.g., Logistic Regression, Random Forest, XGBoost, and potentially others like LightGBM or CatBoost).
+    * [x] **Integrate MLflow:** Connect to MLflow server running on EC2. Log parameters, transformer artifacts (to S3 via MLflow), metrics, and tags for each model type and experiment run.
+    * [x] **Implement HPO (RayTune):** Utilize RayTune for comprehensive hyperparameter optimization across the selected model architectures. Ensure search spaces are well-defined for each model type.
+    * [x] Log the best version of each model type using `mlflow.sklearn.log_model()` or equivalent for other frameworks (artifacts go to S3).
+    * [x] Execute `scripts/train_model.py` on the EC2 instance with appropriate parameters (S3 paths, MLflow URI, Ray Tune settings) to perform HPO and log all experiments and final models to MLflow (artifacts stored on S3 via MLflow).
+    * [x] Verify successful script execution by checking logs and MLflow UI for logged parameters, metrics, preprocessor, and the best model for each algorithm type.
 
-3.  **Airflow DAG for Training:**
+3.  **Airflow DAG for Training & HPO:**
     * [ ] Create DAG file (`/dags/training_pipeline_dag.py`).
     * [ ] Define DAG schedule/args.
     * [ ] Task 1: Optional data split.
