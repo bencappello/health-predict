@@ -290,3 +290,26 @@
   - XGBoost best F1 ~0.07
 - Best models and preprocessors were logged to MLflow with the corrected results.
 - Phase 2, Step 2 is now properly completed.
+
+## $(date +'%Y-%m-%d %H:%M:%S') - Confirmed Training Pipeline Results & Planned Next Steps
+
+- After fixing data leakage, reran the training pipeline (`scripts/train_model.py`).
+- The script now correctly evaluates the final model on the test set and logs these metrics (`test_*`) alongside validation metrics (`val_*`) to MLflow.
+- The test set F1 scores (~0.28 for RF) are significantly lower than the EDA baseline F1 (~0.59).
+- Confirmed that this discrepancy is not simply due to evaluating on validation vs. test data, nor the inclusion/exclusion of `diag` columns.
+- Determined that further reconciliation between the EDA notebook and the training script is needed but decided to defer this analysis.
+- Added a task to `project_steps.md` (end of Phase 2) to explicitly track this performance reconciliation activity.
+- **Decision:** Proceed with building the MLOps infrastructure (Airflow DAG) first, and use the automated pipeline later for the performance investigation and model improvement iterations.
+
+## $(date +'%Y-%m-%d %H:%M:%S') - Initiated Airflow DAG Development for Training Pipeline
+
+- Updated `mlops-services/docker-compose.yml` for Airflow services (`airflow-init`, `airflow-webserver`, `airflow-scheduler`):
+  - Added `pip install docker-compose` to their startup commands to enable the `BashOperator` to execute `docker-compose exec`.
+  - Mounted the Docker socket (`/var/run/docker.sock:/var/run/docker.sock`) to allow Airflow tasks to interact with the Docker daemon on the host.
+- Resolved `EACCES: permission denied` error when trying to create DAG file by changing ownership of `mlops-services/dags` directory to `ubuntu` user (`sudo chown ubuntu:ubuntu mlops-services/dags`).
+- Created initial Airflow DAG `mlops-services/dags/training_pipeline_dag.py`:
+  - DAG ID: `health_predict_training_hpo`.
+  - Schedule: Manual trigger (`schedule=None`).
+  - Task `run_training_and_hpo` (`BashOperator`): Executes `scripts/train_model.py` inside the `jupyterlab` container using `docker-compose exec`. Passes necessary S3 paths, MLflow URI, and Ray Tune parameters.
+  - Uses a distinct MLflow experiment name (`HealthPredict_Training_HPO_Airflow`) and Ray local directory for Airflow runs.
+- Updated `project_steps.md` to mark DAG file creation as complete.

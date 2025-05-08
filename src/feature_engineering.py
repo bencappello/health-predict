@@ -59,8 +59,9 @@ def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
 
     # Drop original diag_1, diag_2, diag_3 as per EDA baseline for simplicity (if they weren't filled with 'Missing')
     # For a more robust pipeline, these would be handled differently (e.g., ICD9 code grouping)
-    # cols_to_drop_diag = ['diag_1', 'diag_2', 'diag_3']
-    # df_featured.drop(columns=[col for col in cols_to_drop_diag if col in df_featured.columns], inplace=True, errors='ignore')
+    cols_to_drop_diag = ['diag_1', 'diag_2', 'diag_3']
+    df_featured.drop(columns=[col for col in cols_to_drop_diag if col in df_featured.columns], inplace=True, errors='ignore')
+    print(f"Dropped diagnostic columns: {cols_to_drop_diag}")
     
     return df_featured
 

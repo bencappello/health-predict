@@ -87,12 +87,13 @@
     * [x] Log the best version of each model type using `mlflow.sklearn.log_model()` or equivalent for other frameworks (artifacts go to S3).
     * [x] Execute `scripts/train_model.py` on the EC2 instance with appropriate parameters (S3 paths, MLflow URI, Ray Tune settings) to perform HPO and log all experiments and final models to MLflow (artifacts stored on S3 via MLflow).
     * [x] Verify successful script execution by checking logs and MLflow UI for logged parameters, metrics, preprocessor, and the best model for each algorithm type.
+    * [ ] **(Analysis)** Reconcile performance discrepancy between EDA baseline (~0.6 F1) and current pipeline test results (~0.28 F1). Investigate potential subtle differences in feature selection or preprocessing. Use the automated pipeline for further iterations.
 
 3.  **Airflow DAG for Training & HPO:**
-    * [ ] Create DAG file (`/dags/training_pipeline_dag.py`).
+    * [x] Create DAG file (`/dags/training_pipeline_dag.py`).
     * [ ] Define DAG schedule/args.
     * [ ] Task 1: Optional data split.
-    * [ ] **Task 2 (`BashOperator`/`PythonOperator`):** Execute `train_model.py`. Pass MLflow tracking URI pointing to the MLflow container on EC2 (e.g., `http://<mlflow-service-name>:5000` or `http://localhost:5000` depending on network mode/execution context). Ensure EC2 role allows S3 access.
+    * [ ] Task 2 (`BashOperator`/`PythonOperator`):** Execute `train_model.py`. Pass MLflow tracking URI pointing to the MLflow container on EC2 (e.g., `http://<mlflow-service-name>:5000` or `http://localhost:5000` depending on network mode/execution context). Ensure EC2 role allows S3 access.
     * [ ] Task 3: Use MLflow client API to find and register the best model in MLflow Model Registry.
     * [ ] Upload DAG file to the mounted `/dags` directory on EC2.
     * [ ] Test DAG execution. Verify results in MLflow UI (artifacts on S3, metadata in local Postgres).

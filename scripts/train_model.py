@@ -112,14 +112,17 @@ def main(args):
     print("Loading data...")
     df_train_raw = load_df_from_s3(args.s3_bucket_name, args.train_key, s3_client)
     df_val_raw = load_df_from_s3(args.s3_bucket_name, args.validation_key, s3_client)
+    df_test_raw = load_df_from_s3(args.s3_bucket_name, args.test_key, s3_client)
 
     print("Cleaning data...")
     df_train_clean = clean_data(df_train_raw)
     df_val_clean = clean_data(df_val_raw)
+    df_test_clean = clean_data(df_test_raw)
 
     print("Engineering features...")
     df_train_featured = engineer_features(df_train_clean)
     df_val_featured = engineer_features(df_val_clean)
+    df_test_featured = engineer_features(df_test_clean)
 
     # Define features (X) and target (y)
     # Ensure original target and original versions of engineered features are dropped from X
@@ -130,6 +133,9 @@ def main(args):
     
     X_val_for_testing = df_val_featured.drop(columns=columns_to_drop_from_features, errors='ignore')
     y_val_for_testing = df_val_featured[args.target_column]
+    
+    X_test_final = df_test_featured.drop(columns=columns_to_drop_from_features, errors='ignore')
+    y_test_final = df_test_featured[args.target_column]
 
     # Determine numerical and categorical features from X_train_for_preprocessor_fitting
     num_cols = X_train_for_preprocessor_fitting.select_dtypes(include=np.number).columns.tolist()
@@ -168,16 +174,21 @@ def main(args):
         print(f"Preprocessor logged to MLflow: {preprocessor_uri}")
 
 
-    # Use preprocess_data to transform X_train and X_val, with fit_preprocessor=False
+    # Use preprocess_data to transform X_train, X_val, and X_test with fit_preprocessor=False
     X_train_processed_df = preprocess_data(X_train_for_preprocessor_fitting, preprocessor, fit_preprocessor=False)
     X_val_processed_df = preprocess_data(X_val_for_testing, preprocessor, fit_preprocessor=False)
+    X_test_processed_df = preprocess_data(X_test_final, preprocessor, fit_preprocessor=False)
 
     # Convert processed data to numpy for Ray/XGBoost if needed, ensure correct dtypes
     X_train_processed = X_train_processed_df.to_numpy()
     X_val_processed = X_val_processed_df.to_numpy()
+    X_test_processed = X_test_processed_df.to_numpy()
+    
+    # Ensure target variables are numpy arrays
     y_train_np = y_train_for_preprocessor_fitting.to_numpy()
     y_val_np = y_val_for_testing.to_numpy()
-    
+    y_test_np = y_test_final.to_numpy()
+
     # Define models and their HPO search spaces
     models_config = {
         "LogisticRegression": {
@@ -273,11 +284,20 @@ def main(args):
                 
                 final_model.fit(X_train_processed, y_train_np)
                 
-                # Evaluate on validation set
+                # Evaluate on validation set (already done in HPO best trial, but good to confirm)
                 y_pred_val_final = final_model.predict(X_val_processed)
                 y_proba_val_final = final_model.predict_proba(X_val_processed)[:, 1] if hasattr(final_model, "predict_proba") else None
                 final_val_metrics = evaluate_model(y_val_np, y_pred_val_final, y_proba_val_final)
                 mlflow.log_metrics({f"val_{k}": v for k,v in final_val_metrics.items()})
+                print(f"Final {model_name} Validation Metrics: {final_val_metrics}")
+
+                # Evaluate on TEST set
+                print(f"Evaluating final {model_name} on TEST set...")
+                y_pred_test_final = final_model.predict(X_test_processed)
+                y_proba_test_final = final_model.predict_proba(X_test_processed)[:, 1] if hasattr(final_model, "predict_proba") else None
+                final_test_metrics = evaluate_model(y_test_np, y_pred_test_final, y_proba_test_final)
+                mlflow.log_metrics({f"test_{k}": v for k,v in final_test_metrics.items()})
+                print(f"Final {model_name} TEST Metrics: {final_test_metrics}")
 
                 # Log the model
                 mlflow.sklearn.log_model(
@@ -305,6 +325,7 @@ if __name__ == "__main__":
     parser.add_argument("--s3-bucket-name", type=str, required=True, help="S3 bucket name for data.")
     parser.add_argument("--train-key", type=str, required=True, help="S3 key for training data CSV.")
     parser.add_argument("--validation-key", type=str, required=True, help="S3 key for validation data CSV.")
+    parser.add_argument("--test-key", type=str, default="processed_data/initial_test.csv", help="S3 key for test data CSV.")
     # parser.add_argument("--preprocessor-output-s3-key", type=str, required=True, help="S3 key to save the fitted preprocessor.")
     parser.add_argument("--target-column", type=str, default="readmitted_binary", help="Name of the target column.")
 
