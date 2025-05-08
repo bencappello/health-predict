@@ -6,7 +6,7 @@ import joblib
 import os
 
 # Columns to drop due to high missing values or other reasons
-COLS_TO_DROP_INITIAL = ['weight', 'payer_code', 'medical_specialty', 'encounter_id', 'patient_nbr']
+COLS_TO_DROP_INITIAL = ['weight', 'payer_code', 'encounter_id', 'patient_nbr']
 # Columns where NaN will be filled with 'Missing'
 COLS_FILL_NA_MISSING = ['race', 'diag_1', 'diag_2', 'diag_3'] # In EDA, diag_1, diag_2, diag_3 were dropped for baseline, but keeping here for more general FE pipeline
 
@@ -43,7 +43,7 @@ def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
 
     # Create binary target variable 'readmitted_binary'
     if 'readmitted' in df_featured.columns:
-        df_featured['readmitted_binary'] = df_featured['readmitted'].apply(lambda x: 1 if x == '<30' else 0)
+        df_featured['readmitted_binary'] = df_featured['readmitted'].apply(lambda x: 0 if x == 'NO' else 1) # Align with EDA: 0 if NO, 1 if <30 or >30
         # Drop original 'readmitted' as we now have the binary target
         # df_featured.drop(columns=['readmitted'], inplace=True) # Keep original for now, trainer can decide
 
@@ -98,7 +98,7 @@ def get_preprocessor(df: pd.DataFrame, numerical_features: list = None, categori
     preprocessor = ColumnTransformer(
         transformers=[
             ('num', StandardScaler(), valid_numerical_features),
-            ('cat', OneHotEncoder(handle_unknown='ignore', sparse_output=False), valid_categorical_features) # sparse_output=False for easier use with pandas
+            ('cat', OneHotEncoder(handle_unknown='ignore', sparse_output=False, drop='first'), valid_categorical_features) # Added drop='first'
         ],
         remainder='passthrough' # Keep other columns (e.g., target, identifiers if not dropped)
     )

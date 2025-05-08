@@ -126,7 +126,8 @@ def main(args):
 
     # Define features (X) and target (y)
     # Ensure original target and original versions of engineered features are dropped from X
-    columns_to_drop_from_features = [args.target_column, 'readmitted', 'age']
+    # Also drop identifier columns and high-cardinality/complex diagnostic codes for baseline parity
+    columns_to_drop_from_features = [args.target_column, 'readmitted', 'age', 'encounter_id', 'patient_nbr', 'diag_1', 'diag_2', 'diag_3']
     
     X_train_for_preprocessor_fitting = df_train_featured.drop(columns=columns_to_drop_from_features, errors='ignore')
     y_train_for_preprocessor_fitting = df_train_featured[args.target_column]
@@ -136,6 +137,13 @@ def main(args):
     
     X_test_final = df_test_featured.drop(columns=columns_to_drop_from_features, errors='ignore')
     y_test_final = df_test_featured[args.target_column]
+
+    # Convert potential ID columns to object type to ensure they are treated as categorical
+    potential_categorical_ids = ['admission_type_id', 'discharge_disposition_id', 'admission_source_id']
+    for df in [X_train_for_preprocessor_fitting, X_val_for_testing, X_test_final]:
+        for col_id in potential_categorical_ids:
+            if col_id in df.columns:
+                df[col_id] = df[col_id].astype(str) # Using str to ensure it's picked by select_dtypes as object
 
     # Determine numerical and categorical features from X_train_for_preprocessor_fitting
     num_cols = X_train_for_preprocessor_fitting.select_dtypes(include=np.number).columns.tolist()

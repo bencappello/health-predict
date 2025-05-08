@@ -489,3 +489,49 @@ date: 2025-05-09 (Continued VI)
     4.  User re-ran the DAG, which completed successfully.
 
 **Next Steps:** The Airflow DAG is now operational. The MLOps stack (Postgres, Airflow, MLflow, JupyterLab) is fully functional.
+
+---
+date: 2025-05-09 (Continued VII)
+---
+
+## Session Summary
+
+**Goal:** Reconcile model performance discrepancy between initial EDA (F1 ~0.59) and pipeline runs (F1 ~0.28).
+
+**Outcome:** Identified that identifier columns (`encounter_id`, `patient_nbr`) were not explicitly dropped in `scripts/train_model.py` before preprocessing, contrary to the EDA process described in the journal. Modified the script to drop these columns. Reran the training pipeline via `docker-compose exec`. The resulting test F1 scores remained low (~0.28 for LogReg, ~0.24 for RF). Concluded that the discrepancy is likely due to an overly optimistic/flawed result from the initial interactive EDA, and the current pipeline performance represents a more reliable baseline.
+
+**Obstacles & Resolutions:**
+
+*   **Issue:** Significant difference in F1 score between EDA baseline (~0.59) and pipeline runs (~0.28).
+*   **Investigation 1:** Hypothesized that identifier columns (`encounter_id`, `patient_nbr`) might have been included in pipeline features but not EDA. Checked `scripts/train_model.py` and confirmed they were not explicitly dropped.
+*   **Resolution 1:** Modified `scripts/train_model.py` to drop `encounter_id` and `patient_nbr` before identifying features for the preprocessor.
+*   **Experiment 1:** Reran `scripts/train_model.py` using `docker-compose exec` with reduced Ray Tune samples.
+*   **Analysis 1:** The F1 scores did not improve; Random Forest F1 was slightly lower (~0.24). Dropping IDs was correct but not the cause of the discrepancy.
+*   **Investigation 2:** Reviewed other potential differences (class weighting, data cleaning, feature engineering, preprocessing steps) between EDA description and pipeline code (`feature_engineering.py`, `train_model.py`). No significant inconsistencies were found. Correct practices like fitting preprocessor only on training data were confirmed in the pipeline.
+*   **Conclusion:** The EDA result was likely flawed or optimistic. The current pipeline performance (Test F1 ~0.28) is the accepted baseline.
+
+**Next Steps:** Proceed with MLOps development using the current pipeline baseline performance.
+
+---
+date: 2025-05-09 (Continued VIII)
+---
+
+## Session Summary
+
+**Goal:** Reconcile model performance discrepancy between initial EDA (F1 ~0.59) and pipeline runs (F1 ~0.28) through rigorous, iterative investigation.
+
+**Outcome:** **Successfully reconciled the performance discrepancy.** The root cause was identified as an incorrect definition of the binary target variable (`readmitted_binary`) in the pipeline's feature engineering script (`src/feature_engineering.py`). The EDA script correctly defined general readmission (NO vs. <30 or >30) as the target, while the pipeline initially defined it as readmission *within 30 days* (NO or >30 vs. <30). After correcting the target variable in the pipeline to match the EDA, and ensuring full alignment of feature dropping (diagnostics, identifiers), categorical treatment of ID columns, and OneHotEncoder parameters (`drop='first'`), the pipeline's Logistic Regression model achieved a test F1 score of ~0.59, matching the EDA baseline.
+
+**Iterative Investigation Steps & Findings:**
+
+1.  **Initial Hypothesis (Identifier Columns):** Assumed `encounter_id`, `patient_nbr` were not dropped in pipeline. Corrected this in `train_model.py`. No significant F1 change.
+2.  **Hypothesis (Diagnostic Columns):** Assumed EDA dropped `diag_1, diag_2, diag_3` while pipeline kept them. Modified `train_model.py` to also drop them. No significant F1 change.
+3.  **Re-run EDA Script:** Confirmed `01_eda_baseline.py` indeed produces F1 ~0.59 on its test set.
+4.  **Hypothesis (ID Column Treatment):** Found EDA treated numeric IDs (`admission_type_id`, etc.) as categorical (OHE), while pipeline scaled them. Modified `train_model.py` to cast these IDs to string type before feature detection, ensuring they were OHEd. Still low F1 in pipeline.
+5.  **Hypothesis (Feature Count Mismatch - `medical_specialty`):** Discovered EDA kept `medical_specialty` while pipeline (`src/feature_engineering.py`) hardcoded its removal. Modified pipeline to keep `medical_specialty`. Pipeline feature count increased but still didn't match EDA.
+6.  **Hypothesis (Feature Count Mismatch - `OneHotEncoder(drop)`):** Found EDA used `drop='first'` for OHE, while pipeline used `drop=None`. Modified pipeline to use `drop='first'.` **Pipeline feature count (131) now matched EDA.** However, pipeline F1 score remained low (~0.28).
+7.  **FINAL HYPOTHESIS (Target Variable Definition):** Meticulously compared target variable creation. Found EDA defined `readmitted_binary` as `0 if x == 'NO' else 1` (any readmission). Pipeline (`src/feature_engineering.py`) had defined it as `1 if x == '<30' else 0` (readmission *within* 30 days).
+8.  **RESOLUTION:** Corrected `readmitted_binary` definition in `src/feature_engineering.py` to `0 if x == 'NO' else 1`. Reran pipeline.
+    *   **RESULT: Logistic Regression Test F1 score ~0.59, successfully matching the EDA baseline.**
+
+**Next Steps:** Update `project_steps.md`, commit all changes, and proceed with planned MLOps development, confident in the baseline performance understanding.
