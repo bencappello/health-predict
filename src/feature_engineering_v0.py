@@ -6,9 +6,9 @@ import joblib
 import os
 
 # Columns to drop due to high missing values or other reasons
-COLS_TO_DROP_INITIAL = ['weight', 'payer_code'] # encounter_id, patient_nbr will be handled after deduplication
+COLS_TO_DROP_INITIAL = ['weight', 'payer_code', 'encounter_id', 'patient_nbr']
 # Columns where NaN will be filled with 'Missing'
-COLS_FILL_NA_MISSING = ['race'] # diag_1, diag_2, diag_3 will be handled by grouping or specific logic; 'race' will be by dropping NaN rows
+COLS_FILL_NA_MISSING = ['race', 'diag_1', 'diag_2', 'diag_3'] # In EDA, diag_1, diag_2, diag_3 were dropped for baseline, but keeping here for more general FE pipeline
 
 # Discharge dispositions indicating expired or hospice - to be removed
 EXPIRED_HOSPICE_DISPOSITIONS = [11, 13, 14, 19, 20, 21]
@@ -22,59 +22,18 @@ def clean_data(df: pd.DataFrame) -> pd.DataFrame:
         if df_cleaned[col].dtype == 'object':
             df_cleaned[col] = df_cleaned[col].replace('?', np.nan)
 
-    # --- Filter out 'Unknown/Invalid' gender (early, before deduplication) ---
-    if 'gender' in df_cleaned.columns:
-        print(f"Initial gender value counts:\n{df_cleaned['gender'].value_counts(dropna=False)}")
-        df_cleaned = df_cleaned[~df_cleaned['gender'].isin(['Unknown/Invalid'])]
-        print(f"Shape after removing 'Unknown/Invalid' gender: {df_cleaned.shape}")
+    # Drop specified columns
+    cols_to_drop_present = [col for col in COLS_TO_DROP_INITIAL if col in df_cleaned.columns]
+    df_cleaned.drop(columns=cols_to_drop_present, inplace=True, errors='ignore')
 
-    # --- Keep only first encounter per patient (aligning with Kirshoff) ---
-    if 'patient_nbr' in df_cleaned.columns:
-        print(f"Shape before deduplication by 'patient_nbr': {df_cleaned.shape}")
-        sort_by_cols = ['patient_nbr']
-        if 'encounter_id' in df_cleaned.columns: # Should exist at this point
-            sort_by_cols.append('encounter_id')
-        df_cleaned.sort_values(by=sort_by_cols, inplace=True)
-        df_cleaned.drop_duplicates(subset=['patient_nbr'], keep='first', inplace=True)
-        print(f"Shape after deduplication by 'patient_nbr': {df_cleaned.shape}")
-    else:
-        print("Warning: 'patient_nbr' column not found for deduplication, skipping this step.")
-
-    # --- Handle Discharge Disposition (remove hospice/expired) ---
-    if 'discharge_disposition_id' in df_cleaned.columns:
-        print(f"Filtering by 'discharge_disposition_id' for expired/hospice...")
-        df_cleaned['discharge_disposition_id'] = pd.to_numeric(df_cleaned['discharge_disposition_id'], errors='coerce')
-        initial_rows_discharge = len(df_cleaned)
-        df_cleaned = df_cleaned[~df_cleaned['discharge_disposition_id'].isin(EXPIRED_HOSPICE_DISPOSITIONS)]
-        rows_removed_discharge = initial_rows_discharge - len(df_cleaned)
-        print(f"Removed {rows_removed_discharge} rows due to hospice/expired discharge. Current shape: {df_cleaned.shape}")
-
-    # Define all columns to be dropped at this stage
-    final_cols_to_drop_in_clean = [
-        'encounter_id', 'patient_nbr', # Used for deduplication, now drop
-        'weight', 'payer_code', # From original COLS_TO_DROP_INITIAL
-        'medical_specialty',    # Kirshoff dropped, often high missing
-        'admission_type_id', 'discharge_disposition_id', 'admission_source_id', # Kirshoff's irrelevant IDs
-        'citoglipton', 'examide' # Single value columns Kirshoff drops
-    ]
-    cols_to_drop_present = [col for col in final_cols_to_drop_in_clean if col in df_cleaned.columns]
-    if cols_to_drop_present:
-        df_cleaned.drop(columns=cols_to_drop_present, inplace=True, errors='ignore')
-        print(f"Dropped columns in clean_data: {cols_to_drop_present}. Shape: {df_cleaned.shape}")
-
-    # Kirshoff dropped rows with missing 'race'.
-    if 'race' in df_cleaned.columns and df_cleaned['race'].isnull().any():
-        print(f"Missing values in 'race' before dropna: {df_cleaned['race'].isnull().sum()}")
-        df_cleaned.dropna(subset=['race'], inplace=True)
-        print(f"Shape after dropping rows with missing 'race': {df_cleaned.shape}")
-    
-    # For other columns in original COLS_FILL_NA_MISSING that are not diags (and not race), if any, use 'Missing'
-    # This loop will be empty now since COLS_FILL_NA_MISSING only had 'race' effectively for this part.
-    other_cols_to_fill_missing = [col for col in ['race'] if col not in ['diag_1', 'diag_2', 'diag_3', 'race']]
-    for col in other_cols_to_fill_missing: # This list will be empty
+    # Fill NaNs in specified columns with 'Missing'
+    for col in COLS_FILL_NA_MISSING:
         if col in df_cleaned.columns:
             df_cleaned[col].fillna('Missing', inplace=True)
-            print(f"Filled NaNs in {col} with 'Missing'")
+            
+    # Filter out rows based on discharge_disposition_id
+    if 'discharge_disposition_id' in df_cleaned.columns:
+        df_cleaned = df_cleaned[~df_cleaned['discharge_disposition_id'].isin(EXPIRED_HOSPICE_DISPOSITIONS)]
 
     return df_cleaned
 
@@ -82,117 +41,31 @@ def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
     """Apply feature engineering steps."""
     df_featured = df.copy()
 
-    # Target variable 'readmitted_binary' (ANY readmission)
+    # Create binary target variable 'readmitted_binary' for ANY readmission
     if 'readmitted' in df_featured.columns:
+        # First, consolidate '<30' and '>30' into 'YES' for any readmission
         df_featured['readmitted'] = df_featured['readmitted'].replace(['<30', '>30'], 'YES')
+        # Then, create the binary target: 1 for 'YES', 0 for 'NO'
         df_featured['readmitted_binary'] = df_featured['readmitted'].apply(lambda x: 1 if x == 'YES' else 0)
-        # df_featured.drop(columns=['readmitted'], inplace=True) # Explicitly dropped in train_model.py
         print(f"Target variable 'readmitted_binary' engineered for ANY readmission. Distribution:\n{df_featured['readmitted_binary'].value_counts(normalize=True)}")
-    else:
-        raise ValueError("Target column 'readmitted' not found for engineering.")
+        # Drop original 'readmitted' as we now have the binary target
+        # df_featured.drop(columns=['readmitted'], inplace=True) # Kept in train_model.py for explicit drop
 
-    # Age mapping (Kirshoff uses numerical midpoints)
+    # Convert 'age' to ordinal
     if 'age' in df_featured.columns:
-        print("Mapping 'age' to numerical midpoints...")
-        age_dict = {
-            '[0-10)': 5, '[10-20)': 15, '[20-30)': 25, '[30-40)': 35, '[40-50)': 45,
-            '[50-60)': 55, '[60-70)': 65, '[70-80)': 75, '[80-90)': 85, '[90-100)': 95
+        age_mapping = {
+            '[0-10)': 0, '[10-20)': 1, '[20-30)': 2, '[30-40)': 3, '[40-50)': 4,
+            '[50-60)': 5, '[60-70)': 6, '[70-80)': 7, '[80-90)': 8, '[90-100)': 9
         }
-        df_featured['age_mapped'] = df_featured['age'].map(age_dict)
-        # NaNs from unmapped original 'age' values will be handled by the global fillna later.
-        print(f"Created 'age_mapped'. Example values:\n{df_featured['age_mapped'].value_counts(dropna=False).sort_index().head()}")
-    else:
-        print("Warning: 'age' column not found for mapping to midpoints.")
+        df_featured['age_ordinal'] = df_featured['age'].map(age_mapping)
+        # Drop original 'age' column
+        # df_featured.drop(columns=['age'], inplace=True) # Keep original for now
 
-    # Medication columns: 'No' / 'None' -> 0, others ('Steady', 'Up', 'Down') -> 1
-    med_cols = [
-        'metformin', 'repaglinide', 'nateglinide', 'chlorpropamide', 'glimepiride', 'acetohexamide',
-        'glipizide', 'glyburide', 'tolbutamide', 'pioglitazone', 'rosiglitazone', 'acarbose', 'miglitol',
-        'troglitazone', 'tolazamide', 'insulin', # 'examide', 'citoglipton' already dropped in clean_data
-        'glyburide-metformin','glipizide-metformin', 'glimepiride-pioglitazone', 
-        'metformin-rosiglitazone', 'metformin-pioglitazone'
-    ]
-    print("Transforming medication columns to binary (0 or 1)...")
-    
-    df_med_original_values = pd.DataFrame() # To store values before they become 0/1 for nummed logic
-    for col in med_cols:
-        if col in df_featured.columns:
-            df_med_original_values[col] = df_featured[col].copy() # Store original before altering
-            # Explicitly fill NaNs (from original '?') in med columns with 'None' before mapping
-            df_featured[col].fillna('None', inplace=True) 
-            
-            df_featured[col] = df_featured[col].replace(['No', 'None'], 0)
-            df_featured[col] = df_featured[col].replace(['Steady', 'Up', 'Down'], 1)
-            df_featured[col] = pd.to_numeric(df_featured[col], errors='coerce').fillna(0).astype(int)
-
-    print("Creating 'nummed' feature...")
-    df_featured['nummed'] = 0
-    for col in med_cols:
-        if col in df_med_original_values.columns:
-            # Use the original values (where NaNs were also filled with 'None' for this temp series)
-            temp_med_series = df_med_original_values[col].fillna('None')
-            df_featured['nummed'] += (~temp_med_series.isin(['No', 'None'])).astype(int)
-    print(f"'nummed' feature created. Example values:\n{df_featured['nummed'].value_counts().sort_index().head()}")
-    
-    if 'A1Cresult' in df_featured.columns:
-        print("Mapping 'A1Cresult'...")
-        df_featured['A1Cresult'].fillna('None', inplace=True) # Handle original NaNs for consistent mapping
-        a1c_map = {'None': 0, '>7': 1, '>8': 2, 'Norm': 3}
-        df_featured['A1Cresult_mapped'] = df_featured['A1Cresult'].map(a1c_map).fillna(0).astype(int)
-        print(f"Created 'A1Cresult_mapped'. Example values:\n{df_featured['A1Cresult_mapped'].value_counts(dropna=False).sort_index().head()}")
-
-    if 'max_glu_serum' in df_featured.columns:
-        print("Mapping 'max_glu_serum'...")
-        df_featured['max_glu_serum'].fillna('None', inplace=True) # Handle original NaNs for consistent mapping
-        glu_map = {'None': 0, '>200': 1, '>300': 2, 'Norm': 3}
-        df_featured['max_glu_serum_mapped'] = df_featured['max_glu_serum'].map(glu_map).fillna(0).astype(int)
-        print(f"Created 'max_glu_serum_mapped'. Example values:\n{df_featured['max_glu_serum_mapped'].value_counts(dropna=False).sort_index().head()}")
-
-    print("Grouping Diagnosis Codes...")
-    diag_cols_to_group = ['diag_1', 'diag_2', 'diag_3']
-    for col in diag_cols_to_group:
-        if col in df_featured.columns:
-            df_featured[col].fillna('Unknown', inplace=True) # Fill original NaNs before astype(str)
-            df_featured[col] = df_featured[col].astype(str)
-            df_featured[col] = df_featured[col].str.replace('\\.0$', '', regex=True) # Remove .0 for codes like 250.0
-            
-            df_featured.loc[df_featured[col].str.contains('^(39[0-9]|4[0-5][0-9]|785)', na=False, regex=True), col] = 'Circulatory'
-            df_featured.loc[df_featured[col].str.contains('^(4[6-9][0-9]|5[0-1][0-9]|786)', na=False, regex=True), col] = 'Respiratory'
-            df_featured.loc[df_featured[col].str.contains('^(5[2-7][0-9]|787)', na=False, regex=True), col] = 'Digestive'
-            df_featured.loc[df_featured[col].str.contains('^250', na=False, regex=True), col] = 'Diabetes'
-            df_featured.loc[df_featured[col].str.contains('^(8[0-9]{2}|9[0-9]{2})', na=False, regex=True), col] = 'Injury'
-            df_featured.loc[df_featured[col].str.contains('^(71[0-9]|72[0-9]|73[0-9])', na=False, regex=True), col] = 'Musculoskeletal'
-            df_featured.loc[df_featured[col].str.contains('^(5[8-9][0-9]|6[0-2][0-9]|788)', na=False, regex=True), col] = 'Genitourinary'
-            df_featured.loc[df_featured[col].str.contains('^(1[4-9][0-9]|2[0-3][0-9])', na=False, regex=True), col] = 'Neoplasms'
-            df_featured.loc[df_featured[col].str.match('^[EV]', na=False), col] = 'Other' # E or V codes
-            
-            current_categories = ['Circulatory', 'Respiratory', 'Digestive', 'Diabetes', 'Injury', 'Musculoskeletal', 'Genitourinary', 'Neoplasms', 'Other']
-            # Assign 'Other' to any codes not matching above, or originally 'Unknown' / 'nan' string
-            df_featured.loc[~df_featured[col].isin(current_categories) | (df_featured[col].str.lower() == 'nan') | (df_featured[col] == 'Unknown'), col] = 'Other'
-            print(f"Value counts for grouped {col}:\n{df_featured[col].value_counts(dropna=False)}")
-
-    if 'number_diagnoses' in df_featured.columns:
-         df_featured['number_diagnoses'] = pd.to_numeric(df_featured['number_diagnoses'], errors='coerce')
-
-    print("Applying final global fillna strategy for remaining NaNs...")
-    numeric_cols_final_check = df_featured.select_dtypes(include=np.number).columns
-    for num_col in numeric_cols_final_check:
-        if df_featured[num_col].isnull().any():
-            print(f"Filling NaNs in numeric column {num_col} with 0.")
-            df_featured[num_col].fillna(0, inplace=True)
-            
-    object_cols_final_check = df_featured.select_dtypes(include='object').columns
-    for obj_col in object_cols_final_check:
-        if df_featured[obj_col].isnull().any():
-            print(f"Filling NaNs in object column {obj_col} with 'None' string.")
-            df_featured[obj_col].fillna('None', inplace=True)
-            
-    final_nan_check = df_featured.isnull().sum().sum()
-    if final_nan_check > 0:
-        print(f"WARNING: {final_nan_check} NaNs still remain after all engineering steps.")
-        print(df_featured.isnull().sum()[df_featured.isnull().sum() > 0])
-    else:
-        print("Final NaN check after all engineering passed (0 NaNs).")
+    # Drop original diag_1, diag_2, diag_3 as per EDA baseline for simplicity (if they weren't filled with 'Missing')
+    # For a more robust pipeline, these would be handled differently (e.g., ICD9 code grouping)
+    cols_to_drop_diag = ['diag_1', 'diag_2', 'diag_3']
+    df_featured.drop(columns=[col for col in cols_to_drop_diag if col in df_featured.columns], inplace=True, errors='ignore')
+    print(f"Dropped diagnostic columns: {cols_to_drop_diag}")
     
     return df_featured
 
@@ -331,8 +204,8 @@ if __name__ == '__main__':
     # 2. Engineer features
     df_featured = engineer_features(df_cleaned)
     print(f"\ndf_featured shape: {df_featured.shape}")
-    print(df_featured[['age', 'age_mapped', 'readmitted', 'readmitted_binary']].head())
-    assert 'age_mapped' in df_featured.columns
+    print(df_featured[['age', 'age_ordinal', 'readmitted', 'readmitted_binary']].head())
+    assert 'age_ordinal' in df_featured.columns
     assert 'readmitted_binary' in df_featured.columns
 
     # 3. Define features for preprocessor (excluding target and original complex features)
@@ -342,7 +215,7 @@ if __name__ == '__main__':
     # For testing, let's prepare a dataframe that only has features intended for the preprocessor
     # and the target variable which preprocessor should passthrough.
     # Columns like 'readmitted' (original categorical target) and 'age' (original categorical age)
-    # would be dropped if their engineered versions ('readmitted_binary', 'age_mapped') are used.
+    # would be dropped if their engineered versions ('readmitted_binary', 'age_ordinal') are used.
     
     # Identify columns that are not the target or original versions of engineered features
     cols_for_modeling = [col for col in df_featured.columns if col not in ['readmitted', 'age']]
@@ -362,7 +235,7 @@ if __name__ == '__main__':
     # Based on df_featured after cleaning and engineering, and excluding target/original cols.
     
     numerical_cols_test = X_test.select_dtypes(include=np.number).columns.tolist()
-    if 'age_mapped' in numerical_cols_test and 'age' in numerical_cols_test : numerical_cols_test.remove('age') # Should already be gone
+    if 'age_ordinal' in numerical_cols_test and 'age' in numerical_cols_test : numerical_cols_test.remove('age') # Should already be gone
     
     categorical_cols_test = X_test.select_dtypes(include=['object', 'category']).columns.tolist()
     if 'gender' in categorical_cols_test and 'race' in categorical_cols_test: # just an example

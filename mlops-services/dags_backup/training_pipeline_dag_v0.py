@@ -77,10 +77,10 @@ with DAG(
                 --mlflow-tracking-uri \"{MLFLOW_TRACKING_URI}\" \
                 --mlflow-experiment-name \"{EXPERIMENT_NAME}\" \
                 --target-column \"{TARGET_COLUMN}\" \
-                --hpo-num-samples 10 \
+                --ray-num-samples 10 \
                 --ray-max-epochs-per-trial 10 \
                 --ray-grace-period 1 \
-                --ray-tune-local-dir \"{RAY_LOCAL_DIR}\" 
+                --ray-local-dir \"{RAY_LOCAL_DIR}\" 
             echo 'Training script execution command finished.'
         """
         # Note: Using -T with docker-compose exec disables pseudo-tty allocation,

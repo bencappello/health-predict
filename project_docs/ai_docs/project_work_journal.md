@@ -665,3 +665,85 @@ date: 2025-05-09 (Continued XII)
     *   This assessment confirms the foundational capabilities for an AI-driven iterative workflow: triggering runs (already possible), viewing logs, and retrieving detailed results from MLflow.
 
 **Next Steps:** Proceed with tasks related to replicating Kirshoff's notebook results by leveraging these capabilities for running experiments and analyzing outcomes.
+
+---
+date: 2025-05-09 (Continued XIII)
+---
+
+## Session Summary: Iterative Debugging of HPO Pipeline & Next Steps
+
+**Goal:** Debug and successfully execute the hyperparameter optimization (HPO) pipeline, particularly for XGBoost, using Ray Tune within the `scripts/train_model.py` script, triggered via the Airflow DAG `health_predict_training_hpo`. Then, outline a plan for continued model improvement.
+
+**Outcome:** After an extensive and complex debugging process, the XGBoost HPO pipeline was successfully executed. This involved resolving numerous issues related to argument parsing, variable definitions, Ray Tune initialization, and the interaction between Ray Tune's API and the custom training function. The final working approach involved refactoring `train_model_hpo` to accept a single `config` dictionary and modifying `main()` to populate this `config` by embedding all static data and model parameters directly into the `param_space` for `tune.Tuner` (using `tune.grid_search()` for fixed values). This resolved all prior `TypeError` and `NameError` issues. The corrected XGBoost run showed an improvement in F1 score (0.6215) and ROC AUC (0.6943) over previous baselines. Logistic Regression and Random Forest models were then re-enabled in `scripts/train_model.py` for a full pipeline run.
+
+**Detailed Debugging Journey & Resolutions:**
+
+1.  **Initial Problem:** XGBoost HPO part of `scripts/train_model.py` was silently failing when triggered by Airflow, with the DAG run completing too quickly.
+2.  **Airflow DAG Duplication:** Identified and resolved `AirflowDagDuplicatedIdException` by moving the backup DAG file (`training_pipeline_dag_v0.py`) out of the active DAGs folder.
+3.  **Argument Parsing Errors:**
+    *   Corrected mismatches between arguments passed by the DAG (`--ray-num-samples`) and expected by the script (`--hpo-num-samples`).
+    *   Added missing arguments (`--ray-max-epochs-per-trial`, `--ray-grace-period`) to the script's `ArgumentParser`.
+    *   Corrected a typo in the DAG from `--ray-local-dir` to `--ray-tune-local-dir`.
+4.  **`NameError: name 'scale_pos_weight' is not defined`:**
+    *   The `scale_pos_weight` variable was used in the XGBoost configuration without prior calculation.
+    *   Added logic to calculate `scale_pos_weight` based on `y_train_np` class distribution before defining `models_to_run`.
+    *   Initialized logger at the beginning of the script.
+5.  **`ValueError: temp_dir must be absolute path or None` (Ray Init):**
+    *   `args.ray_temp_dir` (defaulting to `~/ray_temp`) was not an absolute path.
+    *   Used `os.path.expanduser()` to convert `args.ray_temp_dir` to an absolute path before passing to `ray.init()`.
+6.  **`AttributeError: module 'ray' has no attribute 'get_dashboard_url'` (Ray Init):**
+    *   The logging lines attempting to use `ray.get_dashboard_url()` were incorrect for the Ray version.
+    *   Removed these logging lines as the dashboard URL is not critical for script execution.
+7.  **`NameError: name 'create_preprocessor' is not defined` (in `main()`):**
+    *   The script was attempting to call `create_preprocessor`, which was not imported.
+    *   Initially tried to add `create_preprocessor` to imports from `feature_engineering`.
+8.  **`ImportError: cannot import name 'create_preprocessor' from 'feature_engineering'`:**
+    *   Realized `create_preprocessor` did not exist in `src/feature_engineering.py`; the correct function was `get_preprocessor`.
+    *   Corrected the import statement in `scripts/train_model.py` to only import valid functions.
+    *   Changed calls from `create_preprocessor` to `get_preprocessor` in the HPO loop.
+9.  **`TypeError: get_preprocessor() got an unexpected keyword argument 'scaler_type'`:**
+    *   The `get_preprocessor` function in `feature_engineering.py` does not accept `scaler_type`.
+    *   Removed the `scaler_type` argument from calls to `get_preprocessor`, defaulting to its internal StandardScaler.
+10. **`TypeError: train_model_hpo() got an unexpected keyword argument 'X_train_processed_data'` (and similar):**
+    *   This was the most complex issue. `tune.with_parameters` was binding static data, but Ray Tune was still attempting to pass them as direct keyword arguments to `train_model_hpo` (which expected only `config`), in addition to them being in the `config` dict.
+    *   **Attempt 1 (failed):** Modified `train_model_hpo` to accept `**kwargs` to catch and log these, while still relying on the `config` dict. This led to a `DeprecationWarning` about `checkpoint_dir` being raised as an error because `**kwargs` could theoretically accept it.
+    *   **Attempt 2 (SUCCESSFUL):**
+        *   Reverted `train_model_hpo` to accept only `config` (i.e., `def train_model_hpo(config):`).
+        *   In `main()`, abandoned `tune.with_parameters` for passing the static data.
+        *   Instead, constructed `current_param_space` for `tune.Tuner` to include *all* parameters for `train_model_hpo`. Tuned hyperparameters were taken from `settings["search_space"]`, and all static data/parameters (e.g., `X_train_processed`, `y_train_np`, `model_name`, `model_class`, `mlflow_tracking_uri`) were added to `current_param_space` by wrapping their single value in `tune.grid_search([value])`.
+        *   `train_model_hpo` was then passed directly as the trainable to `tune.Tuner`.
+        *   This ensured `train_model_hpo` received a single, comprehensive `config` dictionary, resolving all argument-passing issues.
+
+**Final State of `scripts/train_model.py` after Debugging:**
+*   Successfully runs HPO for XGBoost (and now also for Logistic Regression and Random Forest, which were re-enabled).
+*   MLflow logging for trials and best models is functional.
+*   Latest XGBoost results (test F1: 0.6215, test ROC AUC: 0.6943) show improvement from the new feature engineering.
+
+**Next Steps for Model Improvement Iteration:**
+
+1.  **Execute Full Pipeline Run:**
+    *   Trigger the Airflow DAG `health_predict_training_hpo`. This will run the `scripts/train_model.py` script which now includes Logistic Regression, Random Forest, and XGBoost with their respective HPO configurations.
+2.  **Analyze MLflow Results:**
+    *   Once the DAG run completes, access MLflow.
+    *   For each of the three model types ("Best\_LogisticRegression\_Model", "Best\_RandomForest\_Model", "Best\_XGBoost\_Model"):
+        *   Record the `test_f1_score` and `test_roc_auc_score`.
+        *   Note the best hyperparameters found.
+    *   Identify the overall best-performing model from this iteration based on F1 score, then ROC AUC.
+3.  **Plan and Implement Next Set of Improvements (Choose one or more based on analysis):**
+    *   **Imbalanced Data Handling (SMOTE):**
+        *   If F1 scores (especially for the positive class) are still low and class imbalance is significant, integrate SMOTE.
+        *   Modify `src/feature_engineering.py` to apply SMOTE to the training data (e.g., `X_train_for_preprocessor_fitting`, `y_train_for_preprocessor_fitting`) *before* fitting the preprocessor and before passing data to the HPO loop. Be careful to only apply SMOTE to training data, not validation or test.
+    *   **Feature Selection:**
+        *   After preprocessing (OHE, scaling), the feature count might be high.
+        *   In `scripts/train_model.py`, after `X_train_processed`, `X_val_processed`, `X_test_processed` are created, implement a feature selection step (e.g., `SelectKBest` with `f_classif`, or `RFE` with a simple model like Logistic Regression).
+        *   Fit the selector only on `X_train_processed`, then transform `X_train_processed`, `X_val_processed`, and `X_test_processed`.
+        *   Log the selected features or the selector itself to MLflow.
+    *   **Advanced Feature Engineering Ideas (from previous notes):**
+        *   **A1Cresult/max_glu_serum:** Revisit how these are mapped or binned in `src/feature_engineering.py`.
+        *   **Medications:** Explore more nuanced ways to use medication change data beyond the current `nummed` and binary flags.
+        *   **Interaction Terms:** Experiment with creating a few potentially high-impact interaction terms in `src/feature_engineering.py`.
+    *   **Refine HPO Search Spaces:** Based on the best parameters from the current run, narrow down or shift the search spaces for the next HPO iteration in `scripts/train_model.py`.
+    *   **Error Analysis:** For the current best model, perform an error analysis. Download its predictions on the test set, and examine the characteristics of false positives and false negatives. This might give clues for new feature engineering.
+4.  **Iterate:** After implementing an improvement, re-run the pipeline (Trigger DAG), analyze results, and plan the next step.
+
+This systematic approach should help in progressively improving the model performance.
