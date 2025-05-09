@@ -20,6 +20,7 @@ from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from sklearn.compose import ColumnTransformer
 from sklearn.metrics import classification_report, accuracy_score, roc_auc_score, confusion_matrix, f1_score
 import time
+from imblearn.over_sampling import SMOTE
 
 # Configure pandas display options
 pd.set_option('display.max_columns', None)
@@ -265,17 +266,30 @@ else:
 # %%
 model = None
 if X_train_processed_df is not None:
-    print("\n--- Training Random Forest Model (Kirshoff Replication Attempt) ---")
+    print("\n--- Applying SMOTE to training data ---")
+    smote = SMOTE(random_state=42)
+    # Ensure we use the numpy array version if DataFrame creation failed
+    X_train_input = X_train_processed_df.values if isinstance(X_train_processed_df, pd.DataFrame) else X_train_processed
+    X_train_smote, y_train_smote = smote.fit_resample(X_train_input, y_train)
+    print(f"Shape after SMOTE: X_train_smote: {X_train_smote.shape}, y_train_smote: {y_train_smote.shape}")
+    print(f"Original training target distribution:\n{y_train.value_counts(normalize=True)}")
+    # Need pandas Series to use value_counts easily
+    y_train_smote_series = pd.Series(y_train_smote) 
+    print(f"SMOTE training target distribution:\n{y_train_smote_series.value_counts(normalize=True)}")
+
+    print("\n--- Training Random Forest Model (Kirshoff Replication Attempt with SMOTE) ---")
     # Kirshoff report mentions Random Forest with default params (e.g., 100 trees) and class_weight='balanced'
+    # NOTE: When using SMOTE, class_weight='balanced' is typically NOT needed/recommended 
+    # as SMOTE already balances the dataset itself. We will remove it.
     model = RandomForestClassifier(
         n_estimators=100, 
-        class_weight='balanced', 
         random_state=42,
         n_jobs=-1  # Use all available cores
     )
     
     fit_start_time = time.time()
-    model.fit(X_train_processed_df, y_train)
+    # <<< Train on SMOTE data >>>
+    model.fit(X_train_smote, y_train_smote) 
     fit_time = time.time() - fit_start_time
     print(f"Model training completed in {fit_time:.2f} seconds.")
 else:
@@ -287,8 +301,10 @@ else:
 # %%
 if model is not None and X_test_processed_df is not None:
     print("\n--- Evaluating Model on Test Set ---")
-    y_pred_test = model.predict(X_test_processed_df)
-    y_proba_test = model.predict_proba(X_test_processed_df)[:, 1] # Probabilities for AUC
+    # <<< Ensure evaluation uses the original, unprocessed test data >>>
+    X_test_input = X_test_processed_df.values if isinstance(X_test_processed_df, pd.DataFrame) else X_test_processed
+    y_pred_test = model.predict(X_test_input)
+    y_proba_test = model.predict_proba(X_test_input)[:, 1] # Probabilities for AUC
 
     print("\nClassification Report (Test Set):")
     print(classification_report(y_test, y_pred_test, target_names=['Not Readmitted <30', 'Readmitted <30']))
