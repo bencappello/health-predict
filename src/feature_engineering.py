@@ -41,11 +41,15 @@ def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
     """Apply feature engineering steps."""
     df_featured = df.copy()
 
-    # Create binary target variable 'readmitted_binary'
+    # Create binary target variable 'readmitted_binary' for ANY readmission
     if 'readmitted' in df_featured.columns:
-        df_featured['readmitted_binary'] = df_featured['readmitted'].apply(lambda x: 1 if x == '<30' else 0) # Target: 1 if readmitted <30 days, 0 otherwise
+        # First, consolidate '<30' and '>30' into 'YES' for any readmission
+        df_featured['readmitted'] = df_featured['readmitted'].replace(['<30', '>30'], 'YES')
+        # Then, create the binary target: 1 for 'YES', 0 for 'NO'
+        df_featured['readmitted_binary'] = df_featured['readmitted'].apply(lambda x: 1 if x == 'YES' else 0)
+        print(f"Target variable 'readmitted_binary' engineered for ANY readmission. Distribution:\n{df_featured['readmitted_binary'].value_counts(normalize=True)}")
         # Drop original 'readmitted' as we now have the binary target
-        # df_featured.drop(columns=['readmitted'], inplace=True) # Keep original for now, trainer can decide
+        # df_featured.drop(columns=['readmitted'], inplace=True) # Kept in train_model.py for explicit drop
 
     # Convert 'age' to ordinal
     if 'age' in df_featured.columns:

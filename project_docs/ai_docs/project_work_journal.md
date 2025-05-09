@@ -418,7 +418,7 @@ date: 2025-05-09 (Continued III)
 *   **Issue 3:** `jupyterlab` container was initially `Up (unhealthy)`.
 *   **Investigation 3:** Logs showed extensive `pip install` from `requirements-training.txt` was running. Subsequent check showed the container became `Up (healthy)` after installations completed.
 
-**Next Steps:** User to verify all services (Airflow UI, MLflow UI, JupyterLab UI) are accessible in the browser and then re-run the `health_predict_training_hpo` DAG in the Airflow UI to confirm the original `TypeError` (related to `kwargs_from_env`) is resolved and the training script executes successfully.
+**Next Steps:** User to verify all services (Airflow UI, MLflow UI, JupyterLab UI) are accessible in the browser and then re-run the `health_predict_training_hpo` DAG in Airflow.
 
 ---
 date: 2025-05-09 (Continued IV)
@@ -574,3 +574,94 @@ date: 2025-05-09 (Continued X)
 **Conclusion:** The performance is now consistent and reflects the true challenge of predicting readmission within 30 days. The previously higher F1 score (~0.59) from the EDA script was due to it predicting *any* readmission, which is an easier task and not the project's goal.
 
 **Next Steps:** Proceed with the project, using F1 ~0.28 as the Logistic Regression baseline to improve upon.
+
+---
+date: 2025-05-09 (Continued XI)
+---
+
+## Session Summary
+
+**Goal:** Understand and attempt to replicate the high Random Forest F1 score (~0.76) reported in Kirshoff's Kaggle notebook for predicting <30 day readmission.
+
+**Outcome:** Created and executed a new script (`notebooks/02_kirshoff_replication.py`) designed to mimic Kirshoff's preprocessing based on a summary report (`data/kirshoff results - Diabetes.md`). The replication attempt, using the full dataset and aligning dropping/cleaning steps, resulted in a Random Forest F1 score of **0.013**, far below the reported 0.76. The accuracy was high (0.89), but the model failed to predict the positive class.
+
+**Actions Taken:**
+
+1.  **Analyzed Report:** Reviewed `data/kirshoff results - Diabetes.md` to extract preprocessing steps, feature handling, imbalance strategy (`class_weight='balanced'`), and model choice (Random Forest).
+2.  **Created Replication Script:** Developed `notebooks/02_kirshoff_replication.py` implementing the following based on the report:
+    *   Loaded full raw dataset from S3.
+    *   Replaced '?' with NaN.
+    *   Removed 3 'Unknown/Invalid' gender rows.
+    *   Dropped columns: `encounter_id`, `patient_nbr`, `weight`, `payer_code`, `medical_specialty`, `citoglipton`, `examide`, `diag_1`, `diag_2`, `diag_3`.
+    *   Filtered expired/hospice discharge dispositions.
+    *   Created binary target for <30 day readmission.
+    *   Created `age_ordinal`.
+    *   Filled remaining categorical NaNs with "Missing".
+    *   Performed 80/20 stratified train-test split.
+    *   Applied StandardScaler and OneHotEncoder.
+    *   Trained `RandomForestClassifier(n_estimators=100, class_weight='balanced', random_state=42)`.
+3.  **Executed Script:** Ran the script via `docker-compose exec`.
+4.  **Analyzed Results:** The resulting F1 was 0.013, accuracy 0.89, AUC 0.64.
+
+**Analysis of Discrepancy:**
+
+The large gap between the replication attempt (F1 0.013) and the reported result (F1 0.76) suggests significant differences remain, possibly due to:
+*   **Subtle Preprocessing Differences:** The exact method Kirshoff used for handling missing values (especially `A1Cresult`) or other features might be critical and not fully captured in the summary.
+*   **Dataset Filtering:** Kirshoff's final dataset size (66k reported) is much smaller than the one produced by the replication script (~99k). The specific filtering criteria used by Kirshoff to reach 66k are unknown and might significantly impact model performance.
+*   **Advanced Techniques:** Potential use of SMOTE or other imbalance techniques by Kirshoff, despite the summary mentioning only `class_weight`.
+*   **Feature Engineering/Selection:** Kirshoff might have used specific feature interactions or a slightly different final feature set.
+*   **Original Notebook Issues:** Possibility of leakage or specific version dependencies in the original Kaggle notebook.
+
+**Conclusion:** While the replication attempt aligned with the available summary report, it failed to reproduce the high F1 score. Achieving that level likely requires closer inspection of the original notebook code or more advanced techniques (feature engineering, SMOTE, HPO) beyond the reported baseline approach.
+
+**Next Steps:** Focus on improving the current pipeline's performance (baseline F1 ~0.28) using techniques like SMOTE, advanced feature engineering, and hyperparameter tuning, rather than pursuing further direct replication of the potentially hard-to-reproduce Kirshoff baseline.
+
+---
+date: 2025-05-09 (Continued XII)
+---
+
+## Session Summary
+
+**Goal:** Attempt to replicate Kirshoff's F1 score (~0.76) by incorporating SMOTE into the replication script.
+
+**Outcome:** Modified `notebooks/02_kirshoff_replication.py` to apply SMOTE to the training data before training the Random Forest model. Re-ran the script. The resulting F1 score **improved slightly to 0.049** but remained drastically lower than the target of 0.76. Accuracy (0.88) and AUC (0.63) were largely unchanged.
+
+**Actions Taken:**
+
+1.  **Modified Replication Script:** Added `imblearn.over_sampling.SMOTE`. Applied `smote.fit_resample()` to the preprocessed training data (`X_train_processed`, `y_train`). Trained the RandomForestClassifier (without `class_weight='balanced'`, as SMOTE handles the balancing) on the SMOTE-resampled data (`X_train_smote`, `y_train_smote`).
+2.  **Executed Script:** Ran the updated script via `docker-compose exec`.
+3.  **Analyzed Results:** Confirmed SMOTE balanced the training set. Test set evaluation yielded F1=0.049, Accuracy=0.88, AUC=0.63.
+
+**Conclusion:** Applying SMOTE, while a standard technique for imbalance, did not bridge the gap to Kirshoff's reported performance in this replication attempt. This further strengthens the hypothesis that the discrepancy lies in other areas not fully captured by the summary report, such as nuanced feature engineering/selection, specific data filtering leading to the 66k sample size, or potentially different baseline model configurations in the original notebook.
+
+**Next Steps:** Abandon direct replication attempts based on the summary alone. Proceed with improving the project's own established pipeline and baseline (F1 ~0.28) by incorporating techniques like SMOTE, advanced feature engineering (e.g., handling A1Cresult/medications more effectively), and hyperparameter tuning within the `scripts/train_model.py` framework.
+
+## $(date +'%Y-%m-%d %H:%M:%S') - Standardize Target Variable and Trigger Training Pipeline
+
+- **Decision:** Standardized the target variable to predict **any readmission** (i.e., 'readmitted' values '<30' or '>30' map to 1, 'NO' maps to 0) for all future modeling work, aligning with Kirshoff's problem definition for replication attempts and providing a consistent target for the main pipeline.
+- **EDA Script (`notebooks/01_eda_baseline.py`) Update & Analysis:**
+    - Modified `notebooks/01_eda_baseline.py` to use the "any readmission" target.
+    - Ran the script first with the initial 20% data splits. Resulting F1-score for positive class (readmitted): 0.59.
+    - Added a second run to the same script using the full dataset (80/20 train/test split).
+    - Resulting F1-score for positive class (readmitted) on full data: 0.59.
+    - Observation: For the baseline Logistic Regression model in `01_eda_baseline.py`, using the full dataset did not significantly change the F1-score compared to the 20% subset for the "any readmission" target.
+- **Main Training Pipeline Update:**
+    - Modified `src/feature_engineering.py` in the `engineer_features` function to define `readmitted_binary` based on the "any readmission" criteria.
+    - Confirmed that the `jupyterlab` Docker container (used by Airflow to execute `scripts/train_model.py`) mounts the project's `src` directory as a volume, so no Docker image rebuild was needed for Airflow services.
+    - Triggered the `health_predict_training_hpo` Airflow DAG to run the main training pipeline with the updated target variable definition. The pipeline is now executing.
+
+## 2025-05-09: System Documentation and Workflow Capability Assessment
+
+**Session Summary:**
+
+1.  **System Documentation:** Created a comprehensive markdown file `project_docs/system_overview.md`. This document details the MLOps architecture, Docker Compose services (Postgres, MLflow, Airflow components, JupyterLab), key configurations, volume mounts, the training pipeline execution flow, operational procedures, and common troubleshooting tips. This is intended to help future AI agents (and humans) quickly understand the system.
+2.  **Iterative Workflow Capability Assessment:**
+    *   **Airflow Log Access:** Confirmed that Airflow task logs, including the standard output/error from the `scripts/train_model.py`, can be retrieved using `docker-compose logs airflow-scheduler | cat` (run from `~/health-predict/mlops-services/`). The logs from `jupyterlab` service itself were less informative for script execution details.
+    *   **MLflow Results Access:** Successfully demonstrated the ability to interact with the MLflow server via its CLI by:
+        *   Listing all experiments: `docker-compose exec -e MLFLOW_TRACKING_URI=http://localhost:5000 mlflow mlflow experiments search --view all | cat`.
+        *   Identifying the Experiment ID for `HealthPredict_Training_HPO_Airflow` (which is `1`).
+        *   Listing all runs within this experiment: `docker-compose exec -e MLFLOW_TRACKING_URI=http://localhost:5000 mlflow mlflow runs list --experiment-id 1 --view all | cat`.
+        *   Confirmed that detailed run information (metrics, params) can be fetched using `mlflow runs describe --run-id <ID>` with the same exec and environment variable setup.
+    *   This assessment confirms the foundational capabilities for an AI-driven iterative workflow: triggering runs (already possible), viewing logs, and retrieving detailed results from MLflow.
+
+**Next Steps:** Proceed with tasks related to replicating Kirshoff's notebook results by leveraging these capabilities for running experiments and analyzing outcomes.

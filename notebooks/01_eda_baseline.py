@@ -328,10 +328,13 @@ if df_train_processed is not None:
 # %%
 if df_train_processed is not None:
     # 1. Simplify Target Variable 'readmitted'
-    #    <30 -> 1 (Readmitted < 30 days)
-    #    NO, >30 -> 0 (Not Readmitted < 30 days)
-    print("\n--- Simplifying Target Variable 'readmitted' to <30 days ---")
-    df_train_processed['readmitted_binary'] = df_train_processed['readmitted'].apply(lambda x: 1 if x == '<30' else 0)
+    #    <30 OR >30 -> 1 (Any Readmission)
+    #    NO -> 0 (No Readmission)
+    print("\n--- Simplifying Target Variable 'readmitted' to ANY readmission ---")
+    # First, consolidate '<30' and '>30' into 'YES' for any readmission
+    df_train_processed['readmitted'] = df_train_processed['readmitted'].replace(['<30', '>30'], 'YES')
+    # Then, create the binary target: 1 for 'YES', 0 for 'NO'
+    df_train_processed['readmitted_binary'] = df_train_processed['readmitted'].apply(lambda x: 1 if x == 'YES' else 0)
     print(df_train_processed['readmitted_binary'].value_counts(normalize=True))
     
     # 2. Process 'age' column: '[70-80)' -> 75 (midpoint) or ordinal
@@ -461,7 +464,9 @@ if df_train_processed is not None:
             df_val_processed = df_val_processed[~df_val_processed['discharge_disposition_id'].isin(discharge_ids_to_remove)]
             print(f"Validation data rows after hospice/expired filter: {len(df_val_processed)}")
 
-        df_val_processed['readmitted_binary'] = df_val_processed['readmitted'].apply(lambda x: 1 if x == '<30' else 0)
+        # Apply the same target variable transformation to validation data
+        df_val_processed['readmitted'] = df_val_processed['readmitted'].replace(['<30', '>30'], 'YES')
+        df_val_processed['readmitted_binary'] = df_val_processed['readmitted'].apply(lambda x: 1 if x == 'YES' else 0)
         if 'age' in df_val_processed.columns:
              df_val_processed['age_ordinal'] = df_val_processed['age'].map(age_mapping)
         existing_cols_to_drop_val = [col for col in cols_to_drop_engineered if col in df_val_processed.columns]
@@ -491,7 +496,9 @@ if df_train_processed is not None:
             df_test_processed = df_test_processed[~df_test_processed['discharge_disposition_id'].isin(discharge_ids_to_remove)]
             print(f"Test data rows after hospice/expired filter: {len(df_test_processed)}")
 
-        df_test_processed['readmitted_binary'] = df_test_processed['readmitted'].apply(lambda x: 1 if x == '<30' else 0)
+        # Apply the same target variable transformation to test data
+        df_test_processed['readmitted'] = df_test_processed['readmitted'].replace(['<30', '>30'], 'YES')
+        df_test_processed['readmitted_binary'] = df_test_processed['readmitted'].apply(lambda x: 1 if x == 'YES' else 0)
         if 'age' in df_test_processed.columns:
             df_test_processed['age_ordinal'] = df_test_processed['age'].map(age_mapping)
         existing_cols_to_drop_test = [col for col in cols_to_drop_engineered if col in df_test_processed.columns]
@@ -574,4 +581,247 @@ else:
 # End of Initial EDA and Baseline Model Script.
 # Remember to commit this script to Git.
 # Consider stopping the EC2 instance if not actively using it to save costs.
+# ---
+
+# %% [markdown]
+# ## 9. Model Run on Full Dataset (80/20 Split)
+# 
+# This section loads the full dataset, applies the same preprocessing as the initial 20% run,
+# splits it into 80% training and 20% test, and then trains and evaluates the baseline Logistic Regression model.
+
+# %%
+print("\\n\\n--- Starting Full Dataset Run (80/20 Split) ---")
+
+# %% [markdown]
+# ### 9.1 Load Full Raw Data
+
+# %%
+df_full_raw = load_df_from_s3(S3_BUCKET_NAME, FULL_RAW_DATA_KEY, s3_client)
+
+# %% [markdown]
+# ### 9.2 Data Cleaning & Preprocessing (Full Dataset)
+
+# %%
+df_full_processed = None
+if df_full_raw is not None:
+    df_full_processed = df_full_raw.copy()
+    
+    # 4.1 Handling '?' and Special Values (Applied to full dataset)
+    print("Replacing '?' with NaN globally (Full Dataset)...")
+    for col in df_full_processed.columns:
+        if df_full_processed[col].dtype == 'object':
+            df_full_processed[col] = df_full_processed[col].replace('?', np.nan)
+    
+    if 'race' in df_full_processed.columns:
+        print(f"Value counts for 'race' after replacing '?' (Full Dataset):\n{df_full_processed['race'].value_counts(dropna=False)}")
+
+    # 4.2 Handling Missing Values (Based on EDA, applied to full dataset)
+    print("\\n--- Initial Missing Values (Full Dataset, Post '?' replacement) ---")
+    missing_values_full = df_full_processed.isnull().sum()
+    missing_percentage_full = (missing_values_full / len(df_full_processed)) * 100
+    missing_info_full = pd.DataFrame({'Missing Count': missing_values_full, 'Missing Percentage': missing_percentage_full})
+    print(missing_info_full[missing_info_full['Missing Count'] > 0].sort_values(by='Missing Percentage', ascending=False))
+
+    # Re-define cols_to_drop_missing based on the full dataset's characteristics, or use the same ones from 20% run.
+    # For consistency, we'll use the same column names identified from the 20% data for now.
+    # These were 'weight', 'payer_code'. 'medical_specialty' was also considered but its threshold might differ.
+    # The original script had:
+    # cols_to_drop_missing.append('weight')
+    # cols_to_drop_missing.append('payer_code')
+    # medical_specialty was dropped if > 40% missing. Let's re-evaluate for full data
+    
+    cols_to_drop_missing_full = []
+    if 'weight' in df_full_processed.columns and (df_full_processed['weight'].isnull().sum() / len(df_full_processed)) > 0.9:
+        cols_to_drop_missing_full.append('weight')
+    if 'payer_code' in df_full_processed.columns and (df_full_processed['payer_code'].isnull().sum() / len(df_full_processed)) > 0.4: # Using 40% as in original script
+        cols_to_drop_missing_full.append('payer_code')
+    if 'medical_specialty' in df_full_processed.columns and (df_full_processed['medical_specialty'].isnull().sum() / len(df_full_processed)) > 0.4: # Using 40% as in original script
+        cols_to_drop_missing_full.append('medical_specialty')
+
+    if cols_to_drop_missing_full:
+        print(f"\\nDropping columns due to high missing values (Full Dataset): {cols_to_drop_missing_full}")
+        df_full_processed.drop(columns=cols_to_drop_missing_full, inplace=True)
+    
+    print("\\n--- Missing Values After Dropping High-Missing Columns (Full Dataset) ---")
+    missing_values_after_drop_full = df_full_processed.isnull().sum()
+    missing_info_after_drop_full = pd.DataFrame({
+        'Missing Count': missing_values_after_drop_full[missing_values_after_drop_full > 0],
+        'Missing Percentage': (missing_values_after_drop_full[missing_values_after_drop_full > 0] / len(df_full_processed)) * 100
+    })
+    print(missing_info_after_drop_full.sort_values(by='Missing Percentage', ascending=False))
+        
+    for col in ['race', 'diag_1', 'diag_2', 'diag_3']:
+        if col in df_full_processed.columns and df_full_processed[col].isnull().any():
+            print(f"Filling NaNs in '{col}' with 'Missing' (Full Dataset)")
+            df_full_processed[col].fillna('Missing', inplace=True)
+
+    # Discharge disposition filtering (same codes as before)
+    # expired_ids = [11, 19, 20, 21]
+    # hospice_ids = [13, 14]
+    # discharge_ids_to_remove = expired_ids + hospice_ids # This was defined in the 20% run scope
+    
+    # Re-define for clarity or ensure it's accessible; assuming it's the same fixed list.
+    discharge_ids_to_remove_full_run = [11, 13, 14, 19, 20, 21] 
+    if 'discharge_disposition_id' in df_full_processed.columns:
+        initial_rows_full = len(df_full_processed)
+        # Ensure column is numeric before filtering
+        df_full_processed['discharge_disposition_id'] = pd.to_numeric(df_full_processed['discharge_disposition_id'], errors='coerce')
+        df_full_processed = df_full_processed[~df_full_processed['discharge_disposition_id'].isin(discharge_ids_to_remove_full_run)]
+        rows_removed_full = initial_rows_full - len(df_full_processed)
+        print(f"Removed {rows_removed_full} rows due to discharge to hospice or expired (Full Dataset).")
+    
+    print("\\n--- Final Check for Missing Values (Full Dataset) ---")
+    final_missing_full = df_full_processed.isnull().sum().sum()
+    if final_missing_full > 0:
+        print(f"{final_missing_full} total missing values remaining before modeling (Full Dataset).")
+        print(df_full_processed.isnull().sum()[df_full_processed.isnull().sum() > 0])
+    else:
+        print("No missing values remaining before modeling (Full Dataset).")
+
+    # 4.3 Feature Engineering (Applied to full dataset)
+    # 1. Simplify Target Variable 'readmitted' to ANY readmission
+    print("\\n--- Simplifying Target Variable 'readmitted' to ANY readmission (Full Dataset) ---")
+    df_full_processed['readmitted'] = df_full_processed['readmitted'].replace(['<30', '>30'], 'YES')
+    df_full_processed['readmitted_binary'] = df_full_processed['readmitted'].apply(lambda x: 1 if x == 'YES' else 0)
+    print(df_full_processed['readmitted_binary'].value_counts(normalize=True))
+    
+    # 2. Process 'age' column
+    print("\\n--- Processing 'age' column (Full Dataset) ---")
+    if 'age' in df_full_processed.columns:
+        # age_mapping defined in the 20% run's scope. Make sure it's accessible or redefine.
+        age_mapping_full_run = {
+            '[0-10)': 0, '[10-20)': 1, '[20-30)': 2, '[30-40)': 3, '[40-50)': 4,
+            '[50-60)': 5, '[60-70)': 6, '[70-80)': 7, '[80-90)': 8, '[90-100)': 9
+        }
+        df_full_processed['age_ordinal'] = df_full_processed['age'].map(age_mapping_full_run)
+        print(df_full_processed[['age', 'age_ordinal']].head())
+    
+    # 3. Drop original 'readmitted' and 'age' columns, and identifiers
+    # cols_to_drop_engineered defined in 20% run. Redefine for clarity or ensure accessible.
+    cols_to_drop_engineered_full_run = ['readmitted', 'age', 'encounter_id', 'patient_nbr', 'diag_1', 'diag_2', 'diag_3']
+    
+    existing_cols_to_drop_full = [col for col in cols_to_drop_engineered_full_run if col in df_full_processed.columns]
+    print(f"\\nDropping columns (Full Dataset): {existing_cols_to_drop_full}")
+    df_full_processed.drop(columns=existing_cols_to_drop_full, inplace=True)
+    
+    print("\\n--- DataFrame after Feature Engineering (Full Dataset) ---")
+    print(df_full_processed.head())
+    df_full_processed.info()
+else:
+    print("Full raw data not loaded. Skipping full dataset run.")
+
+# %% [markdown]
+# ### 9.3 Train-Test Split (Full Dataset)
+
+# %%
+X_full_train_prepared = None
+y_full_train = None
+X_full_test_prepared = None
+y_full_test = None
+preprocessor_full = None
+
+if df_full_processed is not None and not df_full_processed.empty:
+    y_full = df_full_processed['readmitted_binary']
+    X_full = df_full_processed.drop(columns=['readmitted_binary'])
+
+    X_full_train, X_full_test, y_full_train, y_full_test = train_test_split(
+        X_full, y_full, test_size=0.2, random_state=42, stratify=y_full # Stratify for imbalanced classes
+    )
+    print(f"Full dataset split into training and testing sets:")
+    print(f"X_full_train shape: {X_full_train.shape}, y_full_train shape: {y_full_train.shape}")
+    print(f"X_full_test shape: {X_full_test.shape}, y_full_test shape: {y_full_test.shape}")
+
+    # Identify categorical and numerical features for the full dataset
+    # Re-using potential_categorical_ids from the 20% run's scope or redefining.
+    potential_categorical_ids_full_run = ['admission_type_id', 'discharge_disposition_id', 'admission_source_id']
+    
+    categorical_features_full = X_full_train.select_dtypes(include=['object', 'category']).columns.tolist()
+    for col_id in potential_categorical_ids_full_run:
+        if col_id in X_full_train.columns and X_full_train[col_id].dtype != 'object' and X_full_train[col_id].dtype != 'category':
+            if X_full_train[col_id].nunique() < 30: 
+                 categorical_features_full.append(col_id)
+                 X_full_train[col_id] = X_full_train[col_id].astype('category') # Apply to train
+                 X_full_test[col_id] = X_full_test[col_id].astype('category')   # Apply to test
+
+    numerical_features_full = X_full_train.select_dtypes(include=np.number).columns.tolist()
+    numerical_features_full = [col for col in numerical_features_full if col not in categorical_features_full]
+    
+    categorical_features_full = list(set(categorical_features_full))
+    processed_cols_full = set(categorical_features_full + numerical_features_full)
+    all_cols_full = set(X_full_train.columns)
+
+    if processed_cols_full != all_cols_full:
+        print(f"Warning (Full Dataset): Column mismatch. Untracked columns: {all_cols_full - processed_cols_full}")
+        for rem_col in (all_cols_full - processed_cols_full):
+            if X_full_train[rem_col].dtype == 'object':
+                categorical_features_full.append(rem_col)
+            else:
+                numerical_features_full.append(rem_col)
+        categorical_features_full = list(set(categorical_features_full))
+        numerical_features_full = list(set(numerical_features_full) - set(categorical_features_full))
+
+    print(f"\\nIdentified Numerical Features (Full Dataset): {numerical_features_full}")
+    print(f"Identified Categorical Features (Full Dataset): {categorical_features_full}")
+
+    preprocessor_full = ColumnTransformer(
+        transformers=[
+            ('num', StandardScaler(), numerical_features_full),
+            ('cat', OneHotEncoder(handle_unknown='ignore', drop='first'), categorical_features_full)
+        ], 
+        remainder='passthrough'
+    )
+
+    print("\\nFitting preprocessor and transforming training data (Full Dataset)...")
+    X_full_train_prepared = preprocessor_full.fit_transform(X_full_train)
+    X_full_test_prepared = preprocessor_full.transform(X_full_test)
+    
+    print(f"Full training data transformed. Shape: {X_full_train_prepared.shape}")
+    print(f"Full test data transformed. Shape: {X_full_test_prepared.shape}")
+
+else:
+    print("Full processed data not available. Skipping model training and evaluation for full dataset.")
+
+# %% [markdown]
+# ### 9.4 Train Baseline Model (Logistic Regression - Full Dataset)
+
+# %%
+baseline_model_full = None
+if X_full_train_prepared is not None and y_full_train is not None:
+    print("\\n--- Training Baseline Model (Logistic Regression - Full Dataset) ---")
+    baseline_model_full = LogisticRegression(solver='liblinear', random_state=42, class_weight='balanced')
+    baseline_model_full.fit(X_full_train_prepared, y_full_train)
+    print("Baseline model trained (Full Dataset).")
+else:
+    print("Full training data not prepared. Skipping model training (Full Dataset).")
+
+# %% [markdown]
+# ### 9.5 Evaluate Baseline Model (Full Dataset)
+
+# %%
+if baseline_model_full is not None and X_full_test_prepared is not None and y_full_test is not None:
+    print("\\n--- Evaluating Baseline Model on Test Set (Full Dataset) ---")
+    y_pred_full_test = baseline_model_full.predict(X_full_test_prepared)
+    
+    print("\\nClassification Report (Test Set - Full Dataset):")
+    print(classification_report(y_full_test, y_pred_full_test))
+    
+    print("Accuracy Score (Test Set - Full Dataset):")
+    print(accuracy_score(y_full_test, y_pred_full_test))
+    
+    print("\\nConfusion Matrix (Test Set - Full Dataset):")
+    cm_full = confusion_matrix(y_full_test, y_pred_full_test)
+    plt.figure(figsize=(6,4))
+    sns.heatmap(cm_full, annot=True, fmt='d', cmap='Blues', cbar=False,
+                xticklabels=['Not Readmitted', 'Readmitted'], 
+                yticklabels=['Not Readmitted', 'Readmitted'])
+    plt.xlabel('Predicted')
+    plt.ylabel('Actual')
+    plt.title('Confusion Matrix - Test Set (Full Dataset)')
+    plt.show()
+else:
+    print("Model not trained or full test data not prepared. Skipping evaluation (Full Dataset).")
+
+# %% [markdown]
+# ---
+# End of Full Dataset Run section.
 # ---
