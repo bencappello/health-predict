@@ -328,10 +328,10 @@ if df_train_processed is not None:
 # %%
 if df_train_processed is not None:
     # 1. Simplify Target Variable 'readmitted'
-    #    NO -> 0 (Not Readmitted)
-    #    <30, >30 -> 1 (Readmitted)
-    print("\n--- Simplifying Target Variable 'readmitted' ---")
-    df_train_processed['readmitted_binary'] = df_train_processed['readmitted'].apply(lambda x: 0 if x == 'NO' else 1)
+    #    <30 -> 1 (Readmitted < 30 days)
+    #    NO, >30 -> 0 (Not Readmitted < 30 days)
+    print("\n--- Simplifying Target Variable 'readmitted' to <30 days ---")
+    df_train_processed['readmitted_binary'] = df_train_processed['readmitted'].apply(lambda x: 1 if x == '<30' else 0)
     print(df_train_processed['readmitted_binary'].value_counts(normalize=True))
     
     # 2. Process 'age' column: '[70-80)' -> 75 (midpoint) or ordinal
@@ -461,7 +461,7 @@ if df_train_processed is not None:
             df_val_processed = df_val_processed[~df_val_processed['discharge_disposition_id'].isin(discharge_ids_to_remove)]
             print(f"Validation data rows after hospice/expired filter: {len(df_val_processed)}")
 
-        df_val_processed['readmitted_binary'] = df_val_processed['readmitted'].apply(lambda x: 0 if x == 'NO' else 1)
+        df_val_processed['readmitted_binary'] = df_val_processed['readmitted'].apply(lambda x: 1 if x == '<30' else 0)
         if 'age' in df_val_processed.columns:
              df_val_processed['age_ordinal'] = df_val_processed['age'].map(age_mapping)
         existing_cols_to_drop_val = [col for col in cols_to_drop_engineered if col in df_val_processed.columns]
@@ -491,7 +491,7 @@ if df_train_processed is not None:
             df_test_processed = df_test_processed[~df_test_processed['discharge_disposition_id'].isin(discharge_ids_to_remove)]
             print(f"Test data rows after hospice/expired filter: {len(df_test_processed)}")
 
-        df_test_processed['readmitted_binary'] = df_test_processed['readmitted'].apply(lambda x: 0 if x == 'NO' else 1)
+        df_test_processed['readmitted_binary'] = df_test_processed['readmitted'].apply(lambda x: 1 if x == '<30' else 0)
         if 'age' in df_test_processed.columns:
             df_test_processed['age_ordinal'] = df_test_processed['age'].map(age_mapping)
         existing_cols_to_drop_test = [col for col in cols_to_drop_engineered if col in df_test_processed.columns]
