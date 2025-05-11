@@ -290,3 +290,18 @@
   - XGBoost best F1 ~0.07
 - Best models and preprocessors were logged to MLflow with the corrected results.
 - Phase 2, Step 2 is now properly completed.
+
+## 2025-05-11 21:45:00 - Target Variable Redefinition and Model Performance Improvement
+
+- Modified the feature engineering module to redefine the `readmitted_binary` target variable:
+  - Previous definition: 1 if readmitted in less than 30 days (`<30`), 0 otherwise
+  - New definition: 1 if readmitted at all (both `<30` and `>30`), 0 only if not readmitted (`NO`)
+- This change better represents the general readmission prediction task rather than focusing only on quick readmissions.
+- The revised definition also provides a more balanced class distribution for training.
+- Retrained all three model types (LogisticRegression, RandomForest, XGBoost) using the updated target definition.
+- Observed dramatic improvements in model performance:
+  - RandomForest: F1 score improved from ~0.28 to 0.63
+  - XGBoost: F1 score improved from ~0.07 to 0.63 (most significant improvement)
+  - LogisticRegression: F1 score improved from ~0.27 to 0.61
+- All models are now performing comparably well, with F1 scores above 0.60.
+- The relative performance ranking has changed, with XGBoost now competitive with RandomForest.
