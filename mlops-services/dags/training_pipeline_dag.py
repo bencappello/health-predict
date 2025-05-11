@@ -35,7 +35,7 @@ env_vars = {
     'TRAIN_KEY': 'processed_data/initial_train.csv',
     'VALIDATION_KEY': 'processed_data/initial_validation.csv',
     'TARGET_COLUMN': 'readmitted_binary',
-    'RAY_NUM_SAMPLES': '2',  # Number of HPO trials
+    'RAY_NUM_SAMPLES': '10',  # Number of HPO trials
     'RAY_MAX_EPOCHS': '10',
     'RAY_GRACE_PERIOD': '5',
     'RAY_LOCAL_DIR': '/opt/airflow/ray_results_airflow_hpo',
@@ -73,6 +73,7 @@ run_training_and_hpo = BashOperator(
 )
 
 # Function to find and register the best model in MLflow
+"""
 def find_and_register_best_model(**kwargs):
     # Set MLflow tracking URI
     mlflow_uri = kwargs['params']['mlflow_uri']
@@ -152,8 +153,10 @@ def find_and_register_best_model(**kwargs):
             print(f"Error registering {model_type} model: {str(e)}")
     
     return registered_models
+"""
 
 # Task 2: Find and register the best model in MLflow
+"""
 find_and_register_best_model_task = PythonOperator(
     task_id='find_and_register_best_model',
     python_callable=find_and_register_best_model,
@@ -166,3 +169,4 @@ find_and_register_best_model_task = PythonOperator(
 
 # Define the task dependencies
 run_training_and_hpo >> find_and_register_best_model_task 
+""" 

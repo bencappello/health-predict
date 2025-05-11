@@ -1,0 +1,9 @@
+FROM python:3.10-slim
+
+RUN pip install mlflow==2.11.3 psycopg2-binary
+
+EXPOSE 5000
+
+ENV GUNICORN_CMD_ARGS="--bind 0.0.0.0:5000 --workers 4 --timeout 120"
+
+ENTRYPOINT ["mlflow", "server"] 
