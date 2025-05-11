@@ -7,14 +7,18 @@ services:
       - POSTGRES_USER=airflow
       - POSTGRES_PASSWORD=airflow
       - POSTGRES_DB=airflowdb
+      - POSTGRES_MULTIPLE_DATABASES=airflowdb,mlflowdb
     volumes:
       - pgdata:/var/lib/postgresql/data
+      - ./postgres-init:/docker-entrypoint-initdb.d
     ports:
       - "5432:5432"
 
   airflow-init:
-    image: apache/airflow:2.8.1 # Use a specific version
-    user: "${AIRFLOW_UID:-50000}" # Ensures files are created with host user permissions
+    build:
+      context: .
+      dockerfile: Dockerfile.airflow
+    user: "${AIRFLOW_UID:-50000}"
     depends_on:
       - postgres
     environment:
@@ -31,7 +35,9 @@ services:
     command: -c "airflow db init && airflow users create --username admin --password admin --firstname Anonymous --lastname User --role Admin --email admin@example.com"
 
   airflow-webserver:
-    image: apache/airflow:2.8.1
+    build:
+      context: .
+      dockerfile: Dockerfile.airflow
     user: "${AIRFLOW_UID:-50000}"
     restart: always
     depends_on:
@@ -42,15 +48,19 @@ services:
       - ./dags:/opt/airflow/dags
       - ./logs:/opt/airflow/logs
       - ./plugins:/opt/airflow/plugins
+      - ../scripts:/home/jovyan/work/scripts
+      - ../src:/home/jovyan/work/src
     environment:
       - AIRFLOW__CORE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@postgres:5432/airflowdb
       - AIRFLOW__CORE__EXECUTOR=LocalExecutor
       - AIRFLOW__WEBSERVER__WORKERS=2
-      - ADDITIONAL_PYTHON_PACKAGES=mlflow==2.17.2 pandas>=2.0.0 scikit-learn>=1.3.0
+      - PYTHONPATH=/home/jovyan/work
     command: airflow webserver
 
   airflow-scheduler:
-    image: apache/airflow:2.8.1
+    build:
+      context: .
+      dockerfile: Dockerfile.airflow
     user: "${AIRFLOW_UID:-50000}"
     restart: always
     depends_on:
@@ -59,35 +69,30 @@ services:
       - ./dags:/opt/airflow/dags
       - ./logs:/opt/airflow/logs
       - ./plugins:/opt/airflow/plugins
+      - ../scripts:/home/jovyan/work/scripts
+      - ../src:/home/jovyan/work/src
     environment:
       - AIRFLOW__CORE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@postgres:5432/airflowdb
       - AIRFLOW__CORE__EXECUTOR=LocalExecutor
-      - ADDITIONAL_PYTHON_PACKAGES=mlflow==2.17.2 pandas>=2.0.0 scikit-learn>=1.3.0
+      - PYTHONPATH=/home/jovyan/work
     command: airflow scheduler
 
   mlflow:
-    image: ghcr.io/mlflow/mlflow:v2.11.3 # Use a specific version
+    build:
+      context: .
+      dockerfile: Dockerfile.mlflow
     restart: always
     depends_on:
       - postgres
     ports:
       - "5000:5000"
     environment:
-      - MLFLOW_BACKEND_STORE_URI=postgresql+psycopg2://airflow:airflow@postgres:5432/mlflowdb 
-      # Note: Using the same DB user/pass as Airflow for simplicity here.
-      # For production, you'd use a dedicated user/db for MLflow.
-      # Ensure 'mlflowdb' database is created in postgres or MLflow will attempt to create it.
-      # The postgres service above will create 'airflowdb'. You might need to manually create 'mlflowdb'
-      # or configure MLflow/Postgres to allow MLflow to create it.
-      # A simple way is to add another init service or manually exec into postgres container once to create it.
+      - MLFLOW_BACKEND_STORE_URI=postgresql+psycopg2://airflow:airflow@postgres:5432/mlflowdb
     command: >
-      bash -c "python3 -m pip install --upgrade pip && \
-               python3 -m pip install psycopg2-binary && \
-               mlflow server \
-                 --host 0.0.0.0 \
-                 --port 5000 \
-                 --backend-store-uri postgresql+psycopg2://airflow:airflow@postgres:5432/mlflowdb \
-                 --default-artifact-root s3://health-predict-mlops-f9ac6509/mlflow-artifacts/"
+      --host 0.0.0.0
+      --port 5000
+      --backend-store-uri postgresql+psycopg2://airflow:airflow@postgres:5432/mlflowdb
+      --default-artifact-root s3://health-predict-mlops-f9ac6509/mlflow-artifacts/
 
   jupyterlab:
     image: jupyter/scipy-notebook:latest # Includes pandas, sklearn, matplotlib, seaborn etc.
