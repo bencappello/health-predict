@@ -12,7 +12,6 @@
 2.  **AWS Account & Credentials:**
     * [x] Ensure you have an AWS account with sufficient permissions.
     * [x] Configure AWS credentials locally (e.g., via `aws configure` or environment variables).
-    * [ ] **Action:** Set up AWS Budgets and billing alerts for cost control (e.g., target < $30). *(Skipped for now)*
 
 3.  **Infrastructure as Code (IaC - Terraform/CDK):**
     * [x] Initialize Terraform/CDK project in the `/iac` directory. *(Terraform files created, user to init/plan/apply. See `project_docs/terraform_guide.md`)*
