@@ -43,7 +43,7 @@ def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
 
     # Create binary target variable 'readmitted_binary'
     if 'readmitted' in df_featured.columns:
-        df_featured['readmitted_binary'] = df_featured['readmitted'].apply(lambda x: 1 if x == '<30' else 0)
+        df_featured['readmitted_binary'] = df_featured['readmitted'].apply(lambda x: 0 if x == 'NO' else 1)
         # Drop original 'readmitted' as we now have the binary target
         # df_featured.drop(columns=['readmitted'], inplace=True) # Keep original for now, trainer can decide
 
