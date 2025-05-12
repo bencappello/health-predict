@@ -1,2 +1,5 @@
 - aws region: us-east-1
 - s3 bucket name: health-predict-mlops-f9ac6509
+- AWS Account ID: 536474293413
+- ECR Repository Name: health-predict-api
+- ECR Registry URI (for docker login): 536474293413.dkr.ecr.us-east-1.amazonaws.com

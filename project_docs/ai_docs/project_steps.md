@@ -162,29 +162,29 @@
             *   Using `0.0.0.0` as the host makes the application accessible from outside the container. *(Implemented)*
 
 3.  **Build and Push to ECR:** This step involves building the Docker image defined by the Dockerfile and pushing it to Amazon Elastic Container Registry (ECR), making it available for deployment in Kubernetes. This should be done on the EC2 instance where Docker is installed and configured with AWS credentials.
-    * [ ] **Authenticate Docker with ECR on EC2:**
-        *   **Retrieve ECR Login Command:** Use the AWS CLI to get a temporary Docker login command for your ECR registry.
+    * [x] **Authenticate Docker with ECR on EC2:** *(Implemented)*
+        *   **Retrieve ECR Login Command:** Use the AWS CLI to get a temporary Docker login command for your ECR registry. *(Implemented)*
             *   Command: `aws ecr get-login-password --region <your-aws-region> | docker login --username AWS --password-stdin <your-aws-account-id>.dkr.ecr.<your-aws-region>.amazonaws.com`
             *   Replace `<your-aws-region>` (e.g., `us-east-1`) and `<your-aws-account-id>` with your actual AWS account ID.
             *   This command retrieves a password and pipes it to `docker login`.
-        *   **Verification:** A "Login Succeeded" message should appear.
-    * [ ] **Build Docker Image on EC2:**
-        *   **Navigate to Dockerfile Directory:** Change to the directory containing your `Dockerfile` (e.g., `cd /home/ubuntu/health-predict/src/api` if Dockerfile is there, or `/home/ubuntu/health-predict` if Dockerfile is at root and uses appropriate COPY paths). The path specified in `docker build` for the context (`.` in the example below) should contain the Dockerfile and all files it needs to `COPY`.
-        *   **Define Image Name and Tag:** Choose a meaningful name and tag for your image.
+        *   **Verification:** A "Login Succeeded" message should appear. *(Implemented)*
+    * [x] **Build Docker Image on EC2:** *(Implemented)*
+        *   **Navigate to Dockerfile Directory:** Change to the directory containing your `Dockerfile` (e.g., `cd /home/ubuntu/health-predict/src/api` if Dockerfile is there, or `/home/ubuntu/health-predict` if Dockerfile is at root and uses appropriate COPY paths). The path specified in `docker build` for the context (`.` in the example below) should contain the Dockerfile and all files it needs to `COPY`. *(Project root `/home/ubuntu/health-predict` used as build context)*
+        *   **Define Image Name and Tag:** Choose a meaningful name and tag for your image. *(Implemented as `536474293413.dkr.ecr.us-east-1.amazonaws.com/health-predict-api:latest`)*
             *   ECR image URI format: `<your-aws-account-id>.dkr.ecr.<your-aws-region>.amazonaws.com/<your-ecr-repo-name>:<tag>`
             *   Example: `123456789012.dkr.ecr.us-east-1.amazonaws.com/health-predict-api:latest` or `123456789012.dkr.ecr.us-east-1.amazonaws.com/health-predict-api:v0.1.0`.
             *   Ensure `<your-ecr-repo-name>` matches the ECR repository created by Terraform.
-        *   **Run Docker Build Command:**
+        *   **Run Docker Build Command:** *(Implemented)*
             *   Command: `docker build -t <your-full-ecr-image-uri> .`
             *   Example: `docker build -t 123456789012.dkr.ecr.us-east-1.amazonaws.com/health-predict-api:latest .`
             *   The `-t` flag tags the image. The `.` at the end specifies the build context (current directory).
-        *   **Verification:** Monitor the build process. It should complete without errors. You can list local images using `docker images` to see your newly built image.
-    * [ ] **Push Docker Image to ECR:**
-        *   **Run Docker Push Command:**
+        *   **Verification:** Monitor the build process. It should complete without errors. You can list local images using `docker images` to see your newly built image. *(Implemented, build successful)*
+    * [x] **Push Docker Image to ECR:** *(Implemented)*
+        *   **Run Docker Push Command:** *(Implemented)*
             *   Command: `docker push <your-full-ecr-image-uri>`
             *   Example: `docker push 123456789012.dkr.ecr.us-east-1.amazonaws.com/health-predict-api:latest`
-        *   **Verification:** Monitor the push process. It will upload the image layers to ECR.
-        *   You can verify the image in the AWS ECR console for your repository.
+        *   **Verification:** Monitor the push process. It will upload the image layers to ECR. *(Implemented, push successful)*
+        *   You can verify the image in the AWS ECR console for your repository. *(User to verify in AWS console)*
 
 4.  **Kubernetes Deployment (Targeting Local K8s on EC2):** This step focuses on deploying the containerized API to the local Kubernetes cluster (Minikube/Kind) running on the EC2 instance. This involves creating Kubernetes manifest files for a Deployment and a Service.
     * [ ] **Ensure `kubectl` on EC2 is configured to talk to the local Minikube/Kind cluster:**
