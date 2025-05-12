@@ -261,20 +261,20 @@
             *   Minikube users can also try `minikube service health-predict-api-service --url` to get an accessible URL, which might use a tunnel.
 
 5.  **API Testing (Automated & Manual):** This step ensures the deployed API is functioning correctly through a combination of automated tests and targeted manual verification. The primary focus is on written, repeatable tests.
-    * [ ] **Setup Python Testing Environment (if not already done for other tests):**
-        *   Ensure `pytest` and `requests` (or `httpx` for async tests) are added to your development dependencies (e.g., a `requirements-dev.txt` or equivalent).
+    * [x] **Setup Python Testing Environment (if not already done for other tests):**
+        *   [x] Ensure `pytest` and `requests` (or `httpx` for async tests) are added to your development dependencies (e.g., a `requirements-dev.txt` or equivalent).
             *   Example `requirements-dev.txt` line: `pytest==8.2.2`, `requests==2.32.3`, `httpx==0.27.0`
-        *   Install these dependencies in your local/EC2 development environment where you will run the tests from.
-    * [ ] **Identify API Base URL for Testing:**
-        *   Determine the base URL of the deployed API service. This will be `http://<EC2-IP>:<NodePort>` as identified in the previous Kubernetes deployment verification step (Step 4).
-        *   It's recommended to make this configurable, perhaps via an environment variable for the test suite (e.g., `API_BASE_URL`).
-    * [ ] **Create API Test File Structure:**
-        *   Create a directory for tests if it doesn't exist, e.g., `tests/` at the project root.
-        *   Inside `tests/`, create a subdirectory for API tests, e.g., `tests/api/`.
-        *   Create a test file, e.g., `tests/api/test_api_endpoints.py`.
-    * [ ] **Write Automated Tests for `/health` Endpoint (`tests/api/test_api_endpoints.py`):**
-        *   Import necessary libraries (`pytest`, `requests` or `httpx`).
-        *   Define a test function for the `/health` endpoint (e.g., `test_health_check`):
+        *   [x] Install these dependencies in your local/EC2 development environment where you will run the tests from.
+    * [x] **Identify API Base URL for Testing:**
+        *   [x] Determine the base URL of the deployed API service. This will be `http://<EC2-IP>:<NodePort>` as identified in the previous Kubernetes deployment verification step (Step 4).
+        *   [x] It's recommended to make this configurable, perhaps via an environment variable for the test suite (e.g., `API_BASE_URL`).
+    * [x] **Create API Test File Structure:**
+        *   [x] Create a directory for tests if it doesn't exist, e.g., `tests/` at the project root.
+        *   [x] Inside `tests/`, create a subdirectory for API tests, e.g., `tests/api/`.
+        *   [x] Create a test file, e.g., `tests/api/test_api_endpoints.py`.
+    * [x] **Write Automated Tests for `/health` Endpoint (`tests/api/test_api_endpoints.py`):**
+        *   [x] Import necessary libraries (`pytest`, `requests` or `httpx`).
+        *   [x] Define a test function for the `/health` endpoint (e.g., `test_health_check`):
             *   Send a GET request to `/health` (e.g., `API_BASE_URL + "/health"`).
             *   Assert that the HTTP status code is 200.
             *   Assert that the response body (JSON) contains `{"status": "ok"}`.
