@@ -238,3 +238,19 @@
     - `kubectl get svc health-predict-api-service` showed the NodePort (e.g., 30854).
     - `minikube service health-predict-api-service --url` provided the accessible URL (e.g., `http://192.168.49.2:30854`).
 - Updated `project_steps.md` to mark Phase 3, Step 4 and its sub-tasks as complete.
+
+## $(date +'%Y-%m-%d %H:%M:%S') - Initiated API Testing (Phase 3, Step 5)
+
+- Began work on Phase 3, Step 5: "API Testing (Automated & Manual)".
+- **Setup Testing Environment:**
+    - Created `tests/requirements.txt` with `pytest` and `requests`.
+    - Installed testing dependencies using pip.
+    - Established test file structure: `tests/api/test_api_endpoints.py`.
+- **Implemented Automated Tests:**
+    - Identified API Base URL (`http://192.168.49.2:30854`) from Minikube service exposure.
+    - Wrote `test_health_check` function in `tests/api/test_api_endpoints.py` to verify the `/health` endpoint status and model loading status.
+    - Wrote tests for the `/predict` endpoint in the same file:
+        - `test_predict_valid_input`: Checks for a 200 response and correct output structure using a placeholder valid payload (marked as needing adjustment to match the exact API schema).
+        - `test_predict_missing_field`: Checks for a 422 response when a required field is missing.
+        - `test_predict_invalid_data_type`: Checks for a 422 response when a field has an incorrect data type.
+- Updated `project_steps.md` to mark the completion of the first five sub-tasks of Phase 3, Step 5.
