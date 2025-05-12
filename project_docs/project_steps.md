@@ -88,13 +88,85 @@
     * [x] Verify successful script execution by checking logs and MLflow UI for logged parameters, metrics, preprocessor, and the best model for each algorithm type.
 
 3.  **Airflow DAG for Training & HPO:**
-    * [ ] Create DAG file (`/dags/training_pipeline_dag.py`).
-    * [ ] Define DAG schedule/args.
-    * [ ] Task 1: Optional data split.
-    * [ ] **Task 2 (`BashOperator`/`PythonOperator`):** Execute `train_model.py`. Pass MLflow tracking URI pointing to the MLflow container on EC2 (e.g., `http://<mlflow-service-name>:5000` or `http://localhost:5000` depending on network mode/execution context). Ensure EC2 role allows S3 access.
+    * [x] Create DAG file (`/dags/training_pipeline_dag.py`).
+    * [x] Define DAG schedule/args.
+    * [x] Task 1: Optional data split.
+    * [x] **Task 2 (`BashOperator`/`PythonOperator`):** Execute `train_model.py`. Pass MLflow tracking URI pointing to the MLflow container on EC2 (e.g., `http://<mlflow-service-name>:5000` or `http://localhost:5000` depending on network mode/execution context). Ensure EC2 role allows S3 access.
     * [ ] Task 3: Use MLflow client API to find and register the best model in MLflow Model Registry.
-    * [ ] Upload DAG file to the mounted `/dags` directory on EC2.
-    * [ ] Test DAG execution. Verify results in MLflow UI (artifacts on S3, metadata in local Postgres).
+      **Detailed Implementation Guide for Task 3:**
+
+      This task involves enabling and verifying the `find_and_register_best_model_task` within the `mlops-services/dags/training_pipeline_dag.py` Airflow DAG. This task will use the MLflow client API to identify the best performing model for each type (Logistic Regression, Random Forest, XGBoost) from the HPO runs and register them into the MLflow Model Registry, transitioning them to the "Production" stage.
+
+      **Steps:**
+
+      1.  **Open the DAG File:**
+          *   Navigate to and open `mlops-services/dags/training_pipeline_dag.py`.
+
+      2.  **Locate and Review the `find_and_register_best_model` Function:**
+          *   This Python function is currently commented out using triple quotes (`"""`).
+          *   **Key logic to verify within the function:**
+              *   **MLflow Setup:** `mlflow.set_tracking_uri()` and `mlflow.get_experiment_by_name()` (or `mlflow.create_experiment()`) should correctly connect to your MLflow server and the designated experiment (e.g., `HealthPredict_Training_HPO_Airflow`). These are passed as `kwargs['params']`.
+              *   **Experiment Search:** `mlflow.search_runs()` is used to find relevant runs. Confirm:
+                  *   `experiment_ids` is correctly set.
+                  *   `filter_string` (e.g., `"metrics.val_f1_score > 0"`) is appropriate for finding valid HPO child runs (ensure the metric like `val_f1_score` matches what `train_model.py` logs for HPO trials).
+                  *   `order_by` (e.g., `["metrics.val_f1_score DESC"]`) correctly sorts runs to find the best ones.
+              *   **Iterating Model Types:** The function iterates through `model_types = runs['tags.model_name'].unique()`. This relies on the `model_name` tag being set correctly during the HPO trials in `train_model.py`.
+              *   **Identifying Best Run per Type:** For each `model_type`, it filters runs and selects the top one.
+              *   **Model Registration Call (`mlflow.register_model()`):**
+                  *   `model_uri`: Should be in the format `f"runs:/{best_run_id}/model"`. The `best_run_id` refers to the HPO trial run that logged the model artifact (usually under an implicit `/model` path if `mlflow.sklearn.log_model` was used with default artifact path in the HPO trial, or the explicitly logged final model from the "Best_<ModelType>_Model" run).
+                      *   **IMPORTANT CLARIFICATION**: The `train_model.py` script, after HPO, trains a *final* "Best_<ModelType>_Model" and logs its artifacts. The `find_and_register_best_model` function should ideally register *these* dedicated "Best_<ModelType>_Model" runs, not an individual HPO trial run. The current commented code iterates through `runs` from `mlflow.search_runs` which are HPO trials. This logic might need adjustment to specifically target the parent runs named `"Best_{model_type}_Model"` or it should correctly identify the best HPO *trial* that *also logged a usable model artifact*. For simplicity and directness, ensure the `mlflow.search_runs` targets the main runs where `best_hpo_model == "True"` tag is set and `tags.model_name` is present.
+                      *   Alternatively, if the goal is to register the distinct "Best_<ModelType>_Model" parent runs (which is cleaner), the search query should be `filter_string="tags.best_hpo_model = 'True'"` and then group/select by `tags.model_name`.
+                  *   `name`: The name for the registered model. `f"HealthPredict_{model_type}"` is a good convention.
+              *   **Model Stage Transition:** `client.transition_model_version_stage()` is used. The current code transitions to `"Production"`. This aligns with demonstrating end-to-end capability. For a real-world scenario, "Staging" might be an initial step, but "Production" is acceptable for this project's demonstration goals.
+              *   **Error Handling:** Ensure `try-except` blocks adequately catch and log potential errors during registration or transition.
+              *   **Return Value:** The function returns a list of registered model details, which is good for logging by the `PythonOperator`.
+
+      3.  **Uncomment the `find_and_register_best_model` Function:**
+          *   Remove the leading and trailing triple quotes (`"""`) that are commenting out the entire function block.
+
+      4.  *Locate and Uncomment the `PythonOperator` Task (`find_and_register_best_model_task`):*
+          *   This task definition is also commented out using triple quotes.
+          *   Remove these triple quotes.
+          *   Ensure `python_callable` is set to `find_and_register_best_model`.
+          *   Verify `params` correctly pass `mlflow_uri` and `experiment_name` from the DAG's `env_vars` to the Python function.
+
+      5.  **Update Task Dependencies:**
+          *   At the end of the DAG file, the task dependencies are defined.
+          *   The line `run_training_and_hpo >> find_and_register_best_model_task` (which is likely commented out with the `PythonOperator` task) sets the correct order. Uncomment this line.
+          *   Remove the temporary single-task definition line: `run_training_and_hpo` (this line was added previously to allow the DAG to run with only the first task).
+          *   The final dependency definition should be: `run_training_and_hpo >> find_and_register_best_model_task`.
+
+      6.  **Testing and Verification:**
+          *   **Save `training_pipeline_dag.py`.** Airflow will need to re-parse it.
+          *   **Trigger the DAG:** Manually trigger the `health_predict_training_hpo` DAG via the Airflow UI or CLI.
+          *   **Monitor Execution in Airflow UI:**
+              *   Verify that the `run_training_and_hpo` task completes successfully.
+              *   Verify that the `find_and_register_best_model_task` then runs and completes successfully.
+              *   Check the logs for `find_and_register_best_model_task`. Look for print statements indicating: 
+                  *   Connection to MLflow.
+                  *   Experiment ID being used.
+                  *   Successful fetching of runs.
+                  *   Identification of best models for each type (LogisticRegression, RandomForest, XGBoost).
+                  *   Printouts confirming model registration (e.g., `Registered <ModelType> model as 'HealthPredict_<ModelType>' version <X> in Production stage`).
+                  *   Any errors encountered.
+          *   **Verify in MLflow UI:**
+              *   Navigate to the "Models" section in the MLflow UI.
+              *   You should see new registered models: `HealthPredict_LogisticRegression`, `HealthPredict_RandomForest`, and `HealthPredict_XGBoost`.
+              *   Click on each registered model. It should have at least one version.
+              *   The latest version for each should be in the "Production" stage (or the stage you configured).
+              *   The source run for the registered model version should link back to the correct "Best_<ModelType>_Model" run in the Experiments view.
+
+      7.  **Troubleshooting Considerations:**
+          *   **MLflow Connection Issues:** Ensure `MLFLOW_TRACKING_URI` in the DAG's `env_vars` is correct (`http://mlflow:5000`).
+          *   **Experiment Not Found:** Double-check `EXPERIMENT_NAME` consistency between the DAG and how experiments are named by `train_model.py`.
+          *   **No Runs Found:** If `mlflow.search_runs` returns empty, re-check the `filter_string` and ensure the metrics/tags it's searching for (`val_f1_score`, `tags.model_name`, `tags.best_hpo_model='True'`) are actually being logged by `train_model.py` for the relevant runs.
+          *   **Permissions:** The Airflow worker (running the PythonOperator) needs network access to the MLflow service. This is handled by Docker Compose networking. If MLflow is S3-backed for artifacts, the Airflow worker also needs S3 permissions (typically inherited if running on EC2 with an instance profile, or via AWS credentials configured for the Airflow environment).
+          *   **Model URI Issues:** If model registration fails due to URI, ensure the `model_uri` (e.g., `runs:/{run_id}/model`) correctly points to an actual MLflow-logged model artifact path. The `train_model.py` script logs models under `artifact_path=f"models/{model_name}"`. So, `runs:/{run_id}/models/{model_name}` might be the correct URI to register, or ensure that the "Best_<ModelType>_Model" run *also* logs a default model at `runs:/{run_id}/model` if that's what `register_model` expects by default for that URI scheme.
+
+      By following these detailed steps, the AI agent should be able to successfully implement and verify the model registration task.
+
+    * [x] Upload DAG file to the mounted `/dags` directory on EC2.
+    * [x] Test DAG execution. Verify results in MLflow UI (artifacts on S3, metadata in local Postgres).
 
 **Phase 3: API Development & Deployment to Local K8s (Weeks 5-6)**
 
