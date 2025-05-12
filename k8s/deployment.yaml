@@ -1,0 +1,50 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: health-predict-api-deployment
+  labels:
+    app: health-predict-api
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: health-predict-api
+  template:
+    metadata:
+      labels:
+        app: health-predict-api
+    spec:
+      containers:
+        - name: health-predict-api-container
+          image: 536474293413.dkr.ecr.us-east-1.amazonaws.com/health-predict-api:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8000
+          env:
+            - name: MLFLOW_TRACKING_URI
+              value: "http://host.minikube.internal:5000" # May need to be EC2_PRIVATE_IP if host.minikube.internal doesn't resolve
+            # Add other necessary environment variables like model name, stage if not hardcoded in API
+            # - name: MODEL_NAME
+            #   value: "HealthPredict_RandomForest"
+            # - name: MODEL_STAGE
+            #   value: "Production"
+          resources:
+            limits:
+              cpu: "1"
+              memory: "512Mi"
+            requests:
+              cpu: "0.5"
+              memory: "256Mi"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: health-predict-api-service
+spec:
+  selector:
+    app: health-predict-api
+  ports:
+    - protocol: TCP
+      port: 80 # Service port within K8s cluster
+      targetPort: 8000 # Port on the Pods
+  type: NodePort # Exposes the service on each Node's IP at a static port 

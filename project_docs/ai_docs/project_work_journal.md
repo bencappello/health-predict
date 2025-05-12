@@ -138,10 +138,7 @@
 
 - Reviewed user request to enhance the detail of API containerization and ECR deployment steps in `project_steps.md`.
 
-
 ## $(date +'%Y-%m-%d %H:%M:%S') - Updated API Development Steps in Project Plan
-
-
 
 ## $(date +'%Y-%m-%d %H:%M:%S') - Detailed Containerization and ECR Push Steps in Project Plan
 
@@ -217,3 +214,27 @@
 - Built the Docker image for the FastAPI application using the `Dockerfile` at the project root. The image was tagged as `536474293413.dkr.ecr.us-east-1.amazonaws.com/health-predict-api:latest`.
 - Pushed the tagged Docker image to the specified ECR repository.
 - Updated `project_steps.md` to mark this step and its sub-tasks as complete.
+
+## $(date +'%Y-%m-%d %H:%M:%S') - Deployed API to Local Kubernetes (Minikube)
+
+- Executed Phase 3, Step 4 from `project_steps.md` to deploy the containerized API to Minikube on the EC2 instance.
+- **Troubleshooting Minikube & ECR:**
+    - Initial `kubectl cluster-info` attempts failed due to Minikube not being in a healthy state.
+    - Performed `minikube delete` and a fresh `minikube start --driver=docker`, which was successful.
+    - Encountered `ErrImagePull` for the ECR image (`536474293413.dkr.ecr.us-east-1.amazonaws.com/health-predict-api:latest`) as Minikube's Kubelet couldn't authenticate to ECR.
+    - Attempted `minikube image load <image_uri>`, which initially failed due to an out-of-memory error (exit code 137). Deleted the existing Kubernetes deployment to free resources, and the image load then succeeded.
+    - Even with the image loaded locally and `imagePullPolicy: IfNotPresent` (explicitly set in `k8s/deployment.yaml`), pods still went into `ErrImagePull` because Kubernetes (especially with `:latest` tag) often re-validates with the registry.
+    - **Resolution:** Logged into ECR *within Minikube's Docker environment* using `aws ecr get-login-password --region us-east-1 | (eval $(minikube -p minikube docker-env) && docker login --username AWS --password-stdin <ecr_uri> && eval $(minikube docker-env -u))`. This allowed Minikube's Kubelet to authenticate and pull the image.
+- **Kubernetes Deployment:**
+    - Created `k8s/deployment.yaml` with `Deployment` and `Service` (NodePort type) definitions.
+        - `Deployment` configured for 2 replicas, using the ECR image, exposing container port 8000.
+        - `MLFLOW_TRACKING_URI` environment variable set to `http://host.minikube.internal:5000` (as `project_steps.md` notes, this might need to be EC2 private IP if resolution fails).
+        - `imagePullPolicy` was set to `IfNotPresent` during troubleshooting.
+        - `Service` configured to expose port 80 and target pod port 8000, using `NodePort`.
+    - Applied manifests using `kubectl apply -f k8s/deployment.yaml`.
+- **Verification:**
+    - `kubectl get pods -l app=health-predict-api` showed both pods running (`READY 1/1`).
+    - `kubectl rollout status deployment/health-predict-api-deployment` confirmed successful rollout.
+    - `kubectl get svc health-predict-api-service` showed the NodePort (e.g., 30854).
+    - `minikube service health-predict-api-service --url` provided the accessible URL (e.g., `http://192.168.49.2:30854`).
+- Updated `project_steps.md` to mark Phase 3, Step 4 and its sub-tasks as complete.
