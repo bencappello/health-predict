@@ -297,12 +297,12 @@
                 *   Send a POST request to `/predict`.
                 *   Assert that the HTTP status code is 422.
             *   **(Optional) Edge Case Tests:** Consider tests for edge cases specific to your data or model (e.g., all zero values for numerical inputs if relevant, specific `diag_1` codes if they have special handling).
-    * [ ] **Run Automated API Tests:**
-        *   From the project root directory on your EC2 instance (or wherever you have the test environment and access to the API URL):
-            *   Execute `pytest tests/api/` (or `python -m pytest tests/api/`).
-            *   Ensure all tests pass.
-        *   **Troubleshooting Failing Tests:** Examine `pytest` output for details. Check API pod logs (`kubectl logs ...`) if requests are failing unexpectedly. Debug individual test cases.
-    * [ ] **Manual Testing & Verification (To be performed by Human User - YOU):**
+    * [-] **Run Automated API Tests:**
+        *   [ ] Navigate to project root.
+        *   [ ] Run `pytest tests/api/`.
+        *   [ ] Analyze output. **Result: 3 Passed, 1 Failed (`test_predict_valid_input` - 422 Error).** Requires debugging the 422 error (payload vs Pydantic model mismatch?) and the persistent `boto3` ModuleNotFoundError preventing model load.
+    * [ ] **Manual Testing & Verification (Human User):**
+        *   User to perform exploratory testing via Postman/curl using the identified NodePort URL (e.g., `http://<EC2_Public_IP>:<NodePort>`).
         *   **Purpose:** While automated tests cover expected behavior and common errors, manual exploratory testing can uncover usability issues or unexpected interactions, especially after initial deployment or major changes.
         *   **Action (User):**
             *   Using Postman or `curl` (as detailed in the original Step 5 description), send a few varied valid requests to the `/predict` endpoint using the `http://<EC2-IP>:<NodePort>/predict` URL.

@@ -254,3 +254,14 @@
         - `test_predict_missing_field`: Checks for a 422 response when a required field is missing.
         - `test_predict_invalid_data_type`: Checks for a 422 response when a field has an incorrect data type.
 - Updated `project_steps.md` to mark the completion of the first five sub-tasks of Phase 3, Step 5.
+
+## $(date +'%Y-%m-%d %H:%M:%S') - Executed Automated API Tests & Encountered Issues
+
+- Ran automated tests using `pytest tests/api/` (Phase 3, Step 5, Bullet 6).
+- **Test Results:** 3 Passed, 1 Failed.
+  - **Passed:** `test_health_check` (adapted assertion), `test_predict_missing_field`, `test_predict_invalid_data_type`.
+  - **Failed:** `test_predict_valid_input` with a `422 Unprocessable Entity` error.
+- **Troubleshooting:**
+  - **`boto3` Issue:** Confirmed via pod logs and `kubectl exec` that `boto3` is still missing from the container, preventing model loading, despite multiple attempts to fix via `requirements.txt`, Dockerfile changes, and `--no-cache` builds. The root cause of the build process not installing `boto3` correctly remains unresolved and highly perplexing.
+  - **422 Error:** Removed an extra key from `SAMPLE_VALID_PAYLOAD` in `test_api_endpoints.py`, but the 422 error persists on the valid input test. A visual comparison of the payload and the Pydantic model (`InferenceInput`) did not reveal obvious discrepancies in keys or types. API logs did not provide specific validation field errors.
+- Updated `project_steps.md` to reflect the partial completion and the outstanding issues.
