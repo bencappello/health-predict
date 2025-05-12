@@ -1,0 +1,59 @@
+# Python general
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
+# Virtual environments
+.env
+.venv
+env/
+venv/
+ENV/
+
+# IDEs and editors
+.vscode/
+.idea/
+*.project
+*.swp
+*.sublime-*
+
+# OS-specific
+.DS_Store
+Thumbs.db
+
+# Git files
+.git/
+.gitignore
+
+# Docker files (if this .dockerignore is at root and Dockerfile is also at root)
+# Dockerfile # Usually you want to include the Dockerfile in the context
+
+# Project-specific logs and data not needed in image
+logs/
+*.log
+mlops-services/logs/
+ray_results_airflow_hpo/
+
+# Notebooks & data (if not needed in the final image)
+notebooks/
+# data/ # Uncomment if your data directory is large and not needed in the image
+
+# IaC / Terraform state
+iac/
+.terraform/
+terraform.tfstate
+terraform.tfstate.backup
+*.tfvars
+
+# Test artifacts (if not needed in production image)
+htmlcov/
+.pytest_cache/
+.tox/
+
+# Config files not meant for the image
+config_variables.md 

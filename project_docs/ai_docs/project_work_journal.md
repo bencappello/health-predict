@@ -456,3 +456,59 @@
     - `xgboost==2.1.0`
     - `python-dotenv==1.0.1`
 - Updated `project_steps.md` to mark this sub-task as complete.
+
+## $(date +'%Y-%m-%d %H:%M:%S') - Detailed Containerization and ECR Push Steps in Project Plan
+
+- Reviewed user request to enhance the detail of API containerization and ECR deployment steps in `project_steps.md`.
+- Updated Phase 3, Step 2 ("Containerization") in `project_docs/ai_docs/project_steps.md` to include detailed sub-tasks for creating the `Dockerfile`:
+    - Choosing a base Python image.
+    - Setting the working directory.
+    - Configuring environment variables (e.g., `PYTHONUNBUFFERED`).
+    - Copying `requirements.txt` and installing dependencies efficiently.
+    - Copying application code and the importance of `.dockerignore`.
+    - Exposing the application port.
+    - Defining the `CMD` to run Uvicorn with the FastAPI application.
+- Updated Phase 3, Step 3 ("Build and Push to ECR") in `project_docs/ai_docs/project_steps.md` to include detailed sub-tasks for:
+    - Authenticating Docker with AWS ECR on the EC2 instance using `aws ecr get-login-password`.
+    - Navigating to the correct directory for Docker build context.
+    - Defining the ECR image URI and tag.
+    - Running `docker build` with the appropriate tag.
+    - Running `docker push` to upload the image to ECR.
+    - Verification steps for each command.
+
+## $(date +'%Y-%m-%d %H:%M:%S') - Detailed Kubernetes Deployment and API Testing Steps in Project Plan
+
+- Reviewed user request to enhance the detail of Kubernetes deployment and API testing steps in `project_steps.md`.
+- Updated Phase 3, Step 4 ("Kubernetes Deployment (Targeting Local K8s on EC2)") in `project_docs/ai_docs/project_steps.md` to include detailed sub-tasks for:
+    - Ensuring `kubectl` is configured for the local K8s cluster (Minikube/Kind).
+    - Creating `k8s/deployment.yaml` with comprehensive definitions for `Deployment` and `Service` (NodePort type).
+    - Detailed explanation of `Deployment` specs: replicas, selectors, pod template, container image URI, container port, environment variables (e.g., `MLFLOW_TRACKING_URI`), and resource requests/limits.
+    - Detailed explanation of `Service` specs: selector, ports, and type (`NodePort`).
+    - Important considerations for MLflow and S3 access from pods in the local K8s cluster on EC2, including networking options and IAM permissions.
+    - Steps for applying manifests using `kubectl apply`.
+    - Verification steps using `kubectl get pods`, `kubectl rollout status`, `kubectl get svc`, and how to determine the access NodePort.
+- Updated Phase 3, Step 5 ("API Testing") in `project_docs/ai_docs/project_steps.md` to include detailed sub-tasks for:
+    - Identifying the service NodePort and EC2 IP for accessing the API.
+    - Testing the `/health` endpoint using `curl` from the EC2 instance.
+    - Preparing a sample JSON input for the `/predict` endpoint and saving it to a file.
+    - Testing the `/predict` endpoint using `curl` with the JSON payload.
+    - Expected outputs and troubleshooting tips (checking pod logs, input data).
+    - Optional testing with Postman if the NodePort is externally accessible.
+
+## $(date +'%Y-%m-%d %H:%M:%S') - Refined API Testing Strategy in Project Plan
+
+- Reviewed user request to update the API testing strategy in `project_steps.md`.
+- Rewritten Phase 3, Step 5 ("API Testing (Automated & Manual)") in `project_docs/ai_docs/project_steps.md` to:
+    - Emphasize a primary strategy of written automated tests using `pytest`.
+    - Include detailed sub-tasks for:
+        - Setting up the Python testing environment (`pytest`, `requests`/`httpx`).
+        - Identifying the API base URL for tests.
+        - Creating a test file structure (e.g., `tests/api/test_api_endpoints.py`).
+        - Writing automated tests for the `/health` endpoint (status code, basic response body).
+        - Writing automated tests for the `/predict` endpoint, covering valid input, missing fields, invalid data types, and optional edge cases.
+        - Instructions for running the automated tests using `pytest`.
+    - Clearly define a section for "Manual Testing & Verification" to be performed by the Human User:
+        - Stated purpose: exploratory testing for usability and unexpected interactions.
+        - Outlined actions for the user: sending varied valid and malformed requests to `/predict` and `/health` via Postman or `curl`.
+        - Specified that the user should provide feedback on any issues found.
+    - Updated completion criteria for the step to include: all automated tests passing AND successful manual verification by the Human User.

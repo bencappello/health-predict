@@ -92,186 +92,7 @@
     * [x] Define DAG schedule/args.
     * [x] Task 1: Optional data split.
     * [x] **Task 2 (`BashOperator`/`PythonOperator`):** Execute `train_model.py`. Pass MLflow tracking URI pointing to the MLflow container on EC2 (e.g., `http://<mlflow-service-name>:5000` or `http://localhost:5000` depending on network mode/execution context). Ensure EC2 role allows S3 access.
-    * [x] **Task 3: Use MLflow client API to find and register the best model in MLflow Model Registry.**
-      **Revised Detailed Implementation Guide for Task 3 (AI Agent Focused):**
-
-      This task involves enabling, verifying, and troubleshooting the `find_and_register_best_model_task` within the `mlops-services/dags/training_pipeline_dag.py` Airflow DAG. This task uses the MLflow client API to identify the best performing models and register them.
-
-      **Prerequisites (Assumed already completed by AI Agent in previous steps):**
-
-      *   The file `mlops-services/dags/training_pipeline_dag.py` has been edited to:
-          *   Uncomment the `find_and_register_best_model` Python function.
-          *   Modify the function's `mlflow.search_runs` call to use `filter_string="tags.best_hpo_model = 'True'"`.
-          *   Ensure model registration uses `model_uri=f"runs:/{best_run_id}/model"` and transitions to "Production".
-          *   Uncomment the `find_and_register_best_model_task` PythonOperator.
-          *   Update DAG task dependencies to `run_training_and_hpo >> find_and_register_best_model_task`.
-
-      **Execution & Verification Steps (To be performed by AI Agent):**
-
-      1.  **Ensure DAG File is Updated on EC2:**
-          *   Confirm that the latest version of `mlops-services/dags/training_pipeline_dag.py` (with the model registration logic enabled) is present on the EC2 instance in the correct location for Airflow to pick up. *(This is typically handled when the AI uses an `edit_file` tool targeting the EC2 path, but good to state).*
-
-      2.  **Trigger the Airflow DAG via CLI:**
-          *   **Instruction:** Use a terminal command to trigger the `health_predict_training_hpo` DAG.
-          *   **Command:**
-              ```bash
-              docker-compose -f ~/health-predict/mlops-services/docker-compose.yml exec airflow-scheduler airflow dags trigger health_predict_training_hpo
-              ```
-          *   **Expected Output:** Confirmation of DAG trigger (e.g., "DAG 'health_predict_training_hpo' triggered"). Note the `run_id` if provided, or you'll need to fetch it in the next step.
-
-      3.  **Monitor DAG Run Status and Task Completion via CLI:**
-          *   **Instruction:** Periodically check the status of the DAG run and its tasks until completion or failure.
-          *   **a. Get Latest DAG Run ID (if not noted from trigger step):**
-              *   **Command:**
-                  ```bash
-                  docker-compose -f ~/health-predict/mlops-services/docker-compose.yml exec airflow-scheduler airflow dags list-runs -d health_predict_training_hpo -o plain --no-header | grep -E 'manual__|scheduled__' | tail -n 1 | awk '{print $1}'
-                  ```
-              *   Store the output as `DAG_RUN_ID`.
-          *   **b. Check Overall DAG Run Status:**
-              *   **Command (replace `YOUR_DAG_RUN_ID` with the stored `DAG_RUN_ID`):**
-                  ```bash
-                  # First, get the execution date string for the specific DAG_RUN_ID
-                  EXECUTION_DATE_STR=$(docker-compose -f ~/health-predict/mlops-services/docker-compose.yml exec airflow-scheduler airflow dags list-runs -d health_predict_training_hpo -o plain --no-header | grep "YOUR_DAG_RUN_ID" | awk '{print $3" "$4}')
-                  # Then, get the report
-                  docker-compose -f ~/health-predict/mlops-services/docker-compose.yml exec airflow-scheduler airflow dags report health_predict_training_hpo --start-date "$EXECUTION_DATE_STR" | grep -A 1 "YOUR_DAG_RUN_ID"
-                  ```
-              *   **Expected Output Analysis:** Look for `state=success` for the DAG run. If `state=failed` or `state=running` after a reasonable time, proceed to check task logs.
-          *   **c. Check Task Instance Status (if DAG is successful or for debugging):**
-              *   **Command (replace `YOUR_DAG_RUN_ID` with the stored `DAG_RUN_ID`):**
-                  ```bash
-                  docker-compose -f ~/health-predict/mlops-services/docker-compose.yml exec airflow-scheduler airflow tasks list health_predict_training_hpo YOUR_DAG_RUN_ID
-                  ```
-              *   **Expected Output Analysis:** Verify `run_training_and_hpo` and `find_and_register_best_model` tasks are listed and show `success`.
-
-      4.  **Retrieve and Analyze Airflow Task Logs for `find_and_register_best_model_task`:**
-          *   **Instruction:** Fetch the logs for the `find_and_register_best_model_task` and parse them for specific success indicators.
-          *   **Command (replace `YOUR_DAG_RUN_ID` with the stored `DAG_RUN_ID`):**
-              ```bash
-              docker-compose -f ~/health-predict/mlops-services/docker-compose.yml exec airflow-scheduler airflow tasks logs YOUR_DAG_RUN_ID find_and_register_best_model health_predict_training_hpo
-              ```
-          *   **Log Analysis - Look for:**
-              *   `Setting MLflow tracking URI to: http://mlflow:5000`
-              *   `Using experiment ID: <experiment_id>`
-              *   `Processing Best LogisticRegression model: Run ID <run_id>, F1 Score: <score>`
-              *   `Registered LogisticRegression model as 'HealthPredict_LogisticRegression' version <X> and transitioned to Production stage.`
-              *   Similar messages for `RandomForest` and `XGBoost`.
-              *   Absence of error messages like "No runs found tagged as 'best_hpo_model = True'" or "Error registering or transitioning...".
-
-      5.  **Verify Model Registration and Staging in MLflow Programmatically:**
-          *   **Instruction:** Create and execute a Python script on the EC2 instance (within a suitable environment like the `jupyterlab` container) to query the MLflow API.
-          *   **a. Create Verification Script (`verify_mlflow_registration.py` in `~/health-predict/scripts/` on the EC2 instance):**
-              *   **Action:** Use file editing capabilities to create `/home/jovyan/work/scripts/verify_mlflow_registration.py` inside the `jupyterlab` container (which maps to `~/health-predict/scripts/` on the EC2 host) with the following content:
-              ```python
-              import mlflow
-              import os
-              import sys # Import sys for exit codes
-
-              MLFLOW_TRACKING_URI = os.getenv('MLFLOW_TRACKING_URI', 'http://mlflow:5000')
-              # EXPERIMENT_NAME = os.getenv('EXPERIMENT_NAME', 'HealthPredict_Training_HPO_Airflow') # Not directly used in this script but good for context
-              MODEL_NAMES = ["HealthPredict_LogisticRegression", "HealthPredict_RandomForest", "HealthPredict_XGBoost"]
-
-              print(f"Connecting to MLflow at {MLFLOW_TRACKING_URI}...")
-              mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
-              client = mlflow.tracking.MlflowClient()
-
-              all_checks_passed = True
-
-              for model_name in MODEL_NAMES:
-                  print(f"--- Verifying Model: {model_name} ---")
-                  try:
-                      registered_model = client.get_registered_model(model_name)
-                      # get_registered_model raises mlflow.exceptions.RestException if not found, 
-                      # so an explicit check for None might not be necessary if we let the exception be caught.
-                      # However, for clarity if the API changes or for other clients, explicit checks are safer.
-                      if not registered_model: # Defensive check
-                          print(f"ERROR: Registered model '{model_name}' not found (get_registered_model returned None/False).")
-                          all_checks_passed = False
-                          continue
-                      
-                      print(f"Found registered model: '{model_name}'.")
-                      
-                      latest_versions = registered_model.latest_versions
-                      if not latest_versions:
-                          print(f"ERROR: No versions found for model '{model_name}'.")
-                          all_checks_passed = False
-                          continue
-
-                      production_version_found = False
-                      for version_info in latest_versions:
-                          if version_info.current_stage == 'Production':
-                              production_version_found = True
-                              print(f"  Version {version_info.version} is in 'Production' stage.")
-                              print(f"    Source run_id: {version_info.run_id}")
-                              
-                              # Verify source run details
-                              try:
-                                  source_run = mlflow.get_run(version_info.run_id)
-                                  expected_model_type_tag = model_name.replace('HealthPredict_', '')
-                                  
-                                  if source_run.data.tags.get('best_hpo_model') == 'True' and \
-                                     source_run.data.tags.get('model_name') == expected_model_type_tag:
-                                      print(f"    Source run ID {version_info.run_id} tags verified (best_hpo_model='True', model_name='{expected_model_type_tag}').")
-                                  else:
-                                      print(f"ERROR: Source run ID {version_info.run_id} tags not as expected for {model_name}.")
-                                      print(f"      Expected: best_hpo_model='True', model_name='{expected_model_type_tag}'")
-                                      print(f"      Found Tags: {source_run.data.tags}")
-                                      all_checks_passed = False
-                              except Exception as e_run:
-                                  print(f"ERROR: Could not fetch or verify source run {version_info.run_id} for {model_name}: {e_run}")
-                                  all_checks_passed = False
-                              break # Found a production version, no need to check older latest_versions for this model_name
-                      
-                      if not production_version_found:
-                          print(f"ERROR: No version in 'Production' stage found for model '{model_name}'. Latest versions inspected: {[(v.version, v.current_stage) for v in latest_versions]}")
-                          all_checks_passed = False
-
-                  except mlflow.exceptions.RestException as e_rest:
-                      if "RESOURCE_DOES_NOT_EXIST" in str(e_rest) or e_rest.get_http_status_code() == 404:
-                          print(f"ERROR: Registered model '{model_name}' not found (MLflow API 404/ResourceDoesNotExist).")
-                      else:
-                          print(f"ERROR: MLflow API RestException while verifying model '{model_name}': {e_rest}")
-                      all_checks_passed = False
-                  except Exception as e_general:
-                      print(f"ERROR: A general exception occurred while verifying model '{model_name}': {e_general}")
-                      all_checks_passed = False
-                  print("-" * 40)
-
-              if all_checks_passed:
-                  print("\\nSUCCESS: All MLflow registration and staging checks passed.")
-                  sys.exit(0)
-              else:
-                  print("\\nFAILURE: Some MLflow registration or staging checks failed.")
-                  sys.exit(1)
-              ```
-          *   **b. Execute the Verification Script:**
-              *   **Command:**
-                  ```bash
-                  docker-compose -f ~/health-predict/mlops-services/docker-compose.yml exec jupyterlab python3 /home/jovyan/work/scripts/verify_mlflow_registration.py
-                  ```
-              *   **Expected Output Analysis:** Look for "SUCCESS: All MLflow registration and staging checks passed." The script will exit with code 0 for success, 1 for failure. If failures occur, the script will print detailed errors for each failed check.
-
-      **Troubleshooting Considerations (AI Agent Focused):**
-
-      *   **MLflow Connection Issues:**
-          *   If task logs or verification script show connection errors:
-              *   Verify `MLFLOW_TRACKING_URI` (`http://mlflow:5000`) is correctly defined in `env_vars` in `training_pipeline_dag.py` (AI: use `read_file`).
-              *   Verify the `mlflow` service is running: `docker-compose -f ~/health-predict/mlops-services/docker-compose.yml ps mlflow` (AI: use `run_terminal_cmd`).
-      *   **Experiment Not Found:**
-          *   If logs indicate experiment not found:
-              *   Compare `EXPERIMENT_NAME` in `training_pipeline_dag.py` with the experiment name actually used/created by `scripts/train_model.py` (AI: use `read_file` on both).
-      *   **No Runs Found (Tagged `best_hpo_model='True'`):**
-          *   If the `find_and_register_best_model_task` log shows "No runs found tagged as 'best_hpo_model='True'":
-              *   Read `scripts/train_model.py` to confirm it *is* setting the `best_hpo_model='True'` tag correctly on the final "Best Model" runs (AI: use `read_file`).
-              *   Check the `run_training_and_hpo` task logs (fetched via CLI as above) to ensure it completed successfully and logged these tags.
-      *   **Permissions (S3/MLflow):**
-          *   If logs show permission errors (e.g., to S3 for artifacts or MLflow DB):
-              *   Recall that the Airflow worker runs within a Docker container. The EC2 instance role should have S3 permissions. Docker Compose handles inter-container networking for Postgres. Focus on error messages in logs.
-      *   **Model URI Issues (e.g., `runs:/{run_id}/model` not found):**
-          *   If model registration fails because the artifact path is wrong:
-              *   Read `scripts/train_model.py`. Confirm how `mlflow.sklearn.log_model` (or equivalent) is called for the final "Best Model" runs, specifically checking the `artifact_path` argument (AI: use `read_file`). If it's not the default "model", the `model_uri` in `find_and_register_best_model` function needs adjustment.
-
-      By following these detailed, CLI- and script-oriented steps, an AI agent should be able to execute and verify this task.
-
+    * [x] **Task 3:** Use MLflow client API to find and register the best model in MLflow Model Registry.
     * [x] Upload DAG file to the mounted `/dags` directory on EC2.
     * [x] Test DAG execution. Verify results in MLflow UI (artifacts on S3, metadata in local Postgres).
 
@@ -322,25 +143,177 @@
             *   Any other specific libraries used by the model or feature engineering steps if they are re-executed or part of the model object.
         *   Specify versions for key packages to ensure reproducibility (e.g., `fastapi==0.100.0`, `mlflow==2.3.0`).
 
-2.  **Containerization:** (No changes needed here)
-    * [ ] Create Dockerfile (`/src/api/Dockerfile`).
+2.  **Containerization:** This step involves creating a Dockerfile to package the FastAPI application, its dependencies, and necessary configurations into a portable Docker image.
+    * [x] **Create Dockerfile (`/Dockerfile` at project root):** *(Note: Path adjusted to project root for robust build context)*
+        *   **Base Image:** Start with an official Python base image that matches the version used for development (e.g., `FROM python:3.10-slim`). Choose a slim variant for a smaller image size. *(Implemented)*
+        *   **Set Working Directory:** Define a working directory inside the container (e.g., `WORKDIR /app`). *(Implemented)*
+        *   **Environment Variables (Optional but Recommended):**
+            *   Set `PYTHONUNBUFFERED=1` to ensure Python output (like logs) is sent straight to the terminal without being buffered, which is helpful for Docker logging. *(Implemented)*
+            *   Consider setting `MLFLOW_TRACKING_URI` if it's fixed or as a default, though it's often better to configure this at runtime via Kubernetes environment variables. *(Commented out in Dockerfile, to be set at runtime)*
+        *   **Copy Requirements File:** Copy the `requirements.txt` file into the working directory (e.g., `COPY src/api/requirements.txt .`). *(Implemented)*
+        *   **Install Dependencies:** Install the Python dependencies using pip (e.g., `RUN pip install --no-cache-dir --upgrade pip && pip install --no-cache-dir -r requirements.txt`).
+            *   `--no-cache-dir` prevents pip from storing downloaded packages in a cache, reducing image size. *(Implemented)*
+            *   Upgrading pip first is a good practice. *(Implemented)*
+        *   **Copy Application Code:** Copy the entire `/src` directory into `/app/src` in the image to ensure all modules, including `feature_engineering.py`, are available (e.g., `COPY src ./src`). *(Implemented, ensures `src.api.main` and `src.feature_engineering` are accessible)*
+            *   **Important:** Create a `.dockerignore` file in the project root to exclude unnecessary files and directories from being copied into the image (e.g., `__pycache__`, `.git`, `.venv`, `tests/`, etc.). This is crucial for security, build speed, and image size. *(Implemented at project root)*
+        *   **Expose Port:** Inform Docker that the container listens on a specific network port at runtime (e.g., `EXPOSE 8000`, assuming Uvicorn runs on port 8000). This is documentation; the actual port mapping happens during `docker run` or in Kubernetes service definition. *(Implemented)*
+        *   **Command to Run Application:** Specify the default command to run when the container starts (e.g., `CMD ["uvicorn", "src.api.main:app", "--host", "0.0.0.0", "--port", "8000"]`).
+            *   Ensure the path to `main:app` is correct. With `WORKDIR /app` and `COPY src ./src`, `src.api.main:app` correctly points to `/app/src/api/main.py`. *(Implemented)*
+            *   Using `0.0.0.0` as the host makes the application accessible from outside the container. *(Implemented)*
 
-3.  **Build and Push to ECR:** (No changes needed here)
-    * [ ] Authenticate Docker with ECR on EC2.
-    * [ ] Build Docker Image on EC2.
-    * [ ] Push Docker Image to ECR.
+3.  **Build and Push to ECR:** This step involves building the Docker image defined by the Dockerfile and pushing it to Amazon Elastic Container Registry (ECR), making it available for deployment in Kubernetes. This should be done on the EC2 instance where Docker is installed and configured with AWS credentials.
+    * [ ] **Authenticate Docker with ECR on EC2:**
+        *   **Retrieve ECR Login Command:** Use the AWS CLI to get a temporary Docker login command for your ECR registry.
+            *   Command: `aws ecr get-login-password --region <your-aws-region> | docker login --username AWS --password-stdin <your-aws-account-id>.dkr.ecr.<your-aws-region>.amazonaws.com`
+            *   Replace `<your-aws-region>` (e.g., `us-east-1`) and `<your-aws-account-id>` with your actual AWS account ID.
+            *   This command retrieves a password and pipes it to `docker login`.
+        *   **Verification:** A "Login Succeeded" message should appear.
+    * [ ] **Build Docker Image on EC2:**
+        *   **Navigate to Dockerfile Directory:** Change to the directory containing your `Dockerfile` (e.g., `cd /home/ubuntu/health-predict/src/api` if Dockerfile is there, or `/home/ubuntu/health-predict` if Dockerfile is at root and uses appropriate COPY paths). The path specified in `docker build` for the context (`.` in the example below) should contain the Dockerfile and all files it needs to `COPY`.
+        *   **Define Image Name and Tag:** Choose a meaningful name and tag for your image.
+            *   ECR image URI format: `<your-aws-account-id>.dkr.ecr.<your-aws-region>.amazonaws.com/<your-ecr-repo-name>:<tag>`
+            *   Example: `123456789012.dkr.ecr.us-east-1.amazonaws.com/health-predict-api:latest` or `123456789012.dkr.ecr.us-east-1.amazonaws.com/health-predict-api:v0.1.0`.
+            *   Ensure `<your-ecr-repo-name>` matches the ECR repository created by Terraform.
+        *   **Run Docker Build Command:**
+            *   Command: `docker build -t <your-full-ecr-image-uri> .`
+            *   Example: `docker build -t 123456789012.dkr.ecr.us-east-1.amazonaws.com/health-predict-api:latest .`
+            *   The `-t` flag tags the image. The `.` at the end specifies the build context (current directory).
+        *   **Verification:** Monitor the build process. It should complete without errors. You can list local images using `docker images` to see your newly built image.
+    * [ ] **Push Docker Image to ECR:**
+        *   **Run Docker Push Command:**
+            *   Command: `docker push <your-full-ecr-image-uri>`
+            *   Example: `docker push 123456789012.dkr.ecr.us-east-1.amazonaws.com/health-predict-api:latest`
+        *   **Verification:** Monitor the push process. It will upload the image layers to ECR.
+        *   You can verify the image in the AWS ECR console for your repository.
 
-4.  **Kubernetes Deployment (Targeting Local K8s on EC2):**
-    * [ ] Ensure `kubectl` on EC2 is configured to talk to the local Minikube/Kind cluster.
+4.  **Kubernetes Deployment (Targeting Local K8s on EC2):** This step focuses on deploying the containerized API to the local Kubernetes cluster (Minikube/Kind) running on the EC2 instance. This involves creating Kubernetes manifest files for a Deployment and a Service.
+    * [ ] **Ensure `kubectl` on EC2 is configured to talk to the local Minikube/Kind cluster:**
+        *   **Verify Current Context:** Run `kubectl config current-context` on the EC2 instance. It should show the context for your Minikube or Kind cluster (e.g., `minikube` or `kind-kind`).
+        *   **Check Cluster Info:** Run `kubectl cluster-info` to confirm connectivity to the local cluster master.
+        *   **(If needed) Set Context:** If `kubectl` is not pointing to the correct local cluster, use `kubectl config use-context <your-local-cluster-context-name>`.
     * [ ] **Create/Modify Kubernetes Manifests (`/k8s/deployment.yaml`):**
-        * Define `Deployment`: Use ECR image URI.
-        * Define `Service`: Type `NodePort` or `LoadBalancer` (if Minikube/Kind supports it via metallb or similar) to expose the service outside the K8s cluster but within the EC2 instance network.
-        * **Permissions:** The pods need access to MLflow/S3. Since they run on the EC2 host's Docker daemon (Minikube/Kind), they *might* inherit the EC2 instance profile permissions, but explicitly mounting AWS credentials or using other secure methods might be needed depending on the local K8s setup. *This requires investigation.* Alternatively, bake credentials into the image (less secure) or pass via K8s secrets.
-    * [ ] **Apply Manifests:** Run `kubectl apply -f k8s/deployment.yaml` on the EC2 instance.
-    * [ ] **Verify Deployment:** Check pods (`kubectl get pods`), service (`kubectl get svc`). Determine the NodePort or IP/Port to access the service.
+        *   **Create `k8s` directory:** If it doesn't exist, create a `k8s` directory in your project root (`mkdir k8s`).
+        *   **Create `deployment.yaml`:** Inside the `k8s` directory, create a file named `deployment.yaml`. This file will contain definitions for both the Deployment and the Service.
+        *   **Define `Deployment`:**
+            *   `apiVersion: apps/v1`
+            *   `kind: Deployment`
+            *   `metadata:`
+                *   `name: health-predict-api-deployment` (or a similar descriptive name)
+                *   `labels:`
+                    *   `app: health-predict-api`
+            *   `spec:`
+                *   `replicas: 2` (or your desired number of pod replicas for availability/load handling)
+                *   `selector:`
+                    *   `matchLabels:`
+                        *   `app: health-predict-api` (must match the pod template labels)
+                *   `template:` (Pod template)
+                    *   `metadata:`
+                        *   `labels:`
+                            *   `app: health-predict-api` (pods will have this label)
+                    *   `spec:`
+                        *   `containers:`
+                            *   `- name: health-predict-api-container`
+                            *   `image: <your-full-ecr-image-uri>` (Replace with the ECR image URI pushed in the previous step, e.g., `123456789012.dkr.ecr.us-east-1.amazonaws.com/health-predict-api:latest`)
+                            *   `ports:`
+                                *   `- containerPort: 8000` (the port your FastAPI app listens on inside the container)
+                            *   `env:` (Optional: Define environment variables for the container)
+                                *   `- name: MLFLOW_TRACKING_URI`
+                                *   `value: "http://<EC2-Private-IP>:5000"` (or `http://mlflow:5000` if using Docker Compose network and K8s can resolve it. For Minikube/Kind on EC2, accessing host services directly might require specific network configuration or using the EC2's private IP. This needs careful consideration based on K8s networking setup on EC2. Alternatively, the MLflow server might be exposed differently to K8s pods.)
+                                *   *(Add other necessary environment variables like model name, stage if not hardcoded in API)*
+                            *   `resources:` (Optional but highly recommended for production)
+                                *   `limits:`
+                                    *   `cpu: "1"` (1 CPU core)
+                                    *   `memory: "512Mi"` (512 Megabytes)
+                                *   `requests:`
+                                    *   `cpu: "0.5"` (0.5 CPU core)
+                                    *   `memory: "256Mi"`
+        *   **Define `Service` (in the same `deployment.yaml` file, separated by `---`):**
+            *   `apiVersion: v1`
+            *   `kind: Service`
+            *   `metadata:`
+                *   `name: health-predict-api-service`
+            *   `spec:`
+                *   `selector:`
+                    *   `app: health-predict-api` (must match the labels of the pods created by the Deployment)
+                *   `ports:`
+                    *   `- protocol: TCP`
+                    *   `port: 80` (the port the service will be available on *within* the K8s cluster)
+                    *   `targetPort: 8000` (the port on the pods that the service will forward traffic to)
+                *   `type: NodePort` (Exposes the service on each Node's IP at a static port (the `NodePort`). Makes the service accessible from outside the cluster using `<NodeIP>:<NodePort>`.)
+                    *   Alternatively, for Minikube, `type: LoadBalancer` might work if a load balancer addon like MetalLB is enabled (`minikube tunnel` can also expose LoadBalancer services).
+        *   **Permissions/Networking Notes for Local K8s on EC2:**
+            *   **MLflow Access:** The primary challenge is how pods in the local K8s cluster (Minikube/Kind) access the MLflow service running via Docker Compose on the same EC2 host.
+                *   **Option 1 (EC2 Private IP):** If MLflow port (5000) is exposed on the EC2 instance's network interface (0.0.0.0:5000), pods might be able to reach it via the EC2's private IP address. This requires the EC2 security group to allow traffic on port 5000 from the EC2 instance itself (or its internal Docker/K8s network ranges).
+                *   **Option 2 (Host IP via Minikube/Kind):** Minikube/Kind might provide a way to access the host's network (e.g., `host.minikube.internal` for Minikube). This needs to be verified for the specific local K8s setup.
+                *   **Option 3 (Shared Docker Network - Advanced):** If Kind/Minikube can be configured to use the same Docker network as the Docker Compose services, direct service name resolution (e.g., `http://mlflow:5000`) might work. This is less straightforward.
+            *   **S3 Access:** If the EC2 instance has an IAM role with S3 permissions, pods running on that instance within Minikube/Kind *might* inherit these permissions if the local K8s setup allows it (often the case with Docker-based drivers). No explicit K8s secret for AWS credentials might be needed for S3 in this specific local setup, but this should be tested.
+    * [ ] **Apply Manifests:**
+        *   **Navigate to Manifests Directory:** `cd /home/ubuntu/health-predict/k8s` (or wherever `deployment.yaml` is).
+        *   **Run `kubectl apply`:** `kubectl apply -f deployment.yaml` on the EC2 instance.
+        *   **Verification:** Look for output like `deployment.apps/health-predict-api-deployment created` and `service/health-predict-api-service created`.
+    * [ ] **Verify Deployment:**
+        *   **Check Pods:** `kubectl get pods -l app=health-predict-api`. Wait for pods to be in `Running` state. Check logs of a pod if there are issues: `kubectl logs <pod-name> -c health-predict-api-container`.
+        *   **Check Deployment Status:** `kubectl rollout status deployment/health-predict-api-deployment`. It should report successful rollout.
+        *   **Check Service:** `kubectl get svc health-predict-api-service`.
+            *   Note the `TYPE` (should be `NodePort`).
+            *   Note the `PORT(S)`. It will show something like `80:<NodePort>/TCP`. The `<NodePort>` is a high-numbered port (e.g., 30000-32767) assigned by Kubernetes.
+        *   **Determine Access Point:** To access the service from the EC2 instance itself (or externally if EC2 security group allows the NodePort), you'll use the EC2 instance's IP address and the assigned `NodePort`.
+            *   Minikube users can also try `minikube service health-predict-api-service --url` to get an accessible URL, which might use a tunnel.
 
-5.  **API Testing:**
-    * [ ] Use `curl` or Postman *from the EC2 instance* or *via SSH tunnel* to send requests to the API service using the appropriate NodePort or ClusterIP/Port. Test `/health` and `/predict`.
+5.  **API Testing (Automated & Manual):** This step ensures the deployed API is functioning correctly through a combination of automated tests and targeted manual verification. The primary focus is on written, repeatable tests.
+    * [ ] **Setup Python Testing Environment (if not already done for other tests):**
+        *   Ensure `pytest` and `requests` (or `httpx` for async tests) are added to your development dependencies (e.g., a `requirements-dev.txt` or equivalent).
+            *   Example `requirements-dev.txt` line: `pytest==8.2.2`, `requests==2.32.3`, `httpx==0.27.0`
+        *   Install these dependencies in your local/EC2 development environment where you will run the tests from.
+    * [ ] **Identify API Base URL for Testing:**
+        *   Determine the base URL of the deployed API service. This will be `http://<EC2-IP>:<NodePort>` as identified in the previous Kubernetes deployment verification step (Step 4).
+        *   It's recommended to make this configurable, perhaps via an environment variable for the test suite (e.g., `API_BASE_URL`).
+    * [ ] **Create API Test File Structure:**
+        *   Create a directory for tests if it doesn't exist, e.g., `tests/` at the project root.
+        *   Inside `tests/`, create a subdirectory for API tests, e.g., `tests/api/`.
+        *   Create a test file, e.g., `tests/api/test_api_endpoints.py`.
+    * [ ] **Write Automated Tests for `/health` Endpoint (`tests/api/test_api_endpoints.py`):**
+        *   Import necessary libraries (`pytest`, `requests` or `httpx`).
+        *   Define a test function for the `/health` endpoint (e.g., `test_health_check`):
+            *   Send a GET request to `/health` (e.g., `API_BASE_URL + "/health"`).
+            *   Assert that the HTTP status code is 200.
+            *   Assert that the response body (JSON) contains `{"status": "ok"}`.
+            *   Optionally, assert that the message indicates the model is loaded (this might require the API to be fully up and model loaded before tests run, or have a separate test for post-model-load state).
+    * [ ] **Write Automated Tests for `/predict` Endpoint (`tests/api/test_api_endpoints.py`):**
+        *   Define multiple test functions for the `/predict` endpoint to cover different scenarios:
+            *   **Valid Input Test (e.g., `test_predict_valid_input`):**
+                *   Prepare a valid sample JSON payload (similar to the one used for manual `curl` testing, but defined within the test function or loaded from a test data file).
+                *   Send a POST request to `/predict` with the valid payload.
+                *   Assert that the HTTP status code is 200.
+                *   Assert that the response body (JSON) contains the expected keys (`prediction`, `probability_score`).
+                *   Assert that `prediction` is an integer (0 or 1).
+                *   Assert that `probability_score` is a float between 0.0 and 1.0.
+            *   **Invalid Input Test - Missing Required Field (e.g., `test_predict_missing_field`):**
+                *   Prepare a JSON payload that is missing one or more required fields defined in `InferenceInput`.
+                *   Send a POST request to `/predict`.
+                *   Assert that the HTTP status code is 422 (Unprocessable Entity), which FastAPI typically returns for Pydantic validation errors.
+            *   **Invalid Input Test - Incorrect Data Type (e.g., `test_predict_invalid_data_type`):**
+                *   Prepare a JSON payload where a field has an incorrect data type (e.g., a string where an integer is expected for `time_in_hospital`).
+                *   Send a POST request to `/predict`.
+                *   Assert that the HTTP status code is 422.
+            *   **(Optional) Edge Case Tests:** Consider tests for edge cases specific to your data or model (e.g., all zero values for numerical inputs if relevant, specific `diag_1` codes if they have special handling).
+    * [ ] **Run Automated API Tests:**
+        *   From the project root directory on your EC2 instance (or wherever you have the test environment and access to the API URL):
+            *   Execute `pytest tests/api/` (or `python -m pytest tests/api/`).
+            *   Ensure all tests pass.
+        *   **Troubleshooting Failing Tests:** Examine `pytest` output for details. Check API pod logs (`kubectl logs ...`) if requests are failing unexpectedly. Debug individual test cases.
+    * [ ] **Manual Testing & Verification (To be performed by Human User - YOU):**
+        *   **Purpose:** While automated tests cover expected behavior and common errors, manual exploratory testing can uncover usability issues or unexpected interactions, especially after initial deployment or major changes.
+        *   **Action (User):**
+            *   Using Postman or `curl` (as detailed in the original Step 5 description), send a few varied valid requests to the `/predict` endpoint using the `http://<EC2-IP>:<NodePort>/predict` URL.
+            *   Try at least 2-3 different valid patient profiles that you construct.
+            *   Verify that the predictions and probability scores returned seem reasonable based on your understanding of the model and data (this is a sanity check, not a rigorous model validation).
+            *   Attempt to send a deliberately malformed JSON or an unexpected input type to the `/predict` endpoint and observe if the API handles it gracefully with an appropriate error message (e.g., 400 or 422 error).
+            *   Confirm the `/health` endpoint returns the expected status via browser or `curl`.
+        *   **Feedback (User):** Note any unexpected behavior, confusing error messages, or usability concerns. If critical issues are found, they may warrant new automated tests or API code changes.
+    * [ ] **Completion Criteria:**
+        *   All automated tests in `tests/api/test_api_endpoints.py` must pass when run against the deployed API.
+        *   Manual testing and verification (performed by the Human User) must confirm the API is responding correctly and gracefully to valid and basic invalid inputs.
 
 **Phase 4: CI/CD Automation using AWS Resources (Weeks 7-8)**
 
