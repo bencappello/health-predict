@@ -1,0 +1,206 @@
+import logging
+import os
+from typing import Optional
+
+import mlflow
+import numpy as np
+import pandas as pd
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+
+# Attempt to import feature engineering functions
+try:
+    from src.feature_engineering import clean_data, engineer_features
+except ImportError:
+    logger = logging.getLogger(__name__) # Temp logger for import error
+    logger.error("Could not import from src.feature_engineering. Ensure PYTHONPATH is set correctly or src is a package.")
+    # Define dummy functions if import fails, to allow API to start for other endpoints/testing
+    # This is a fallback for local development if PYTHONPATH is tricky, remove for production container
+    def clean_data(df):
+        logger.warning("Using DUMMY clean_data due to import error.")
+        return df
+    def engineer_features(df):
+        logger.warning("Using DUMMY engineer_features due to import error.")
+        # Simulate age_ordinal creation and age drop if age column exists
+        if 'age' in df.columns:
+            df['age_ordinal'] = 0 # Placeholder
+            df = df.drop(columns=['age'])
+        return df
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+logger = logging.getLogger(__name__)
+
+# Initialize FastAPI app
+app = FastAPI(title="Health Predict API", version="0.1.0")
+
+# MLflow Configuration (Ideally, use environment variables)
+MLFLOW_TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI", "http://mlflow:5000")
+# Specific model name and stage will be determined by the best model registered.
+# These are placeholders and might be loaded dynamically or set more specifically.
+DEFAULT_MODEL_NAME = "HealthPredict_RandomForest" # Example, will be refined
+DEFAULT_MODEL_STAGE = "Production"
+
+# Global variable to hold the loaded model and preprocessor
+model_pipeline = None
+
+# --- Pydantic Models for Request and Response --- 
+class InferenceInput(BaseModel):
+    race: Optional[str] = None
+    gender: str
+    age: str
+    admission_type_id: int
+    discharge_disposition_id: int
+    admission_source_id: int
+    time_in_hospital: int
+    num_lab_procedures: int
+    num_procedures: int
+    num_medications: int
+    number_outpatient: int
+    number_emergency: int
+    number_inpatient: int
+    diag_1: Optional[str] = None
+    diag_2: Optional[str] = None
+    diag_3: Optional[str] = None
+    number_diagnoses: int
+    max_glu_serum: Optional[str] = None
+    A1Cresult: Optional[str] = None
+    metformin: str
+    repaglinide: str
+    nateglinide: str
+    chlorpropamide: str
+    glimepiride: str
+    acetohexamide: str
+    glipizide: str
+    glyburide: str
+    tolbutamide: str
+    pioglitazone: str
+    rosiglitazone: str
+    acarbose: str
+    miglitol: str
+    troglitazone: str
+    tolazamide: str
+    examide: str
+    citoglipton: str
+    insulin: str
+    glyburide_metformin: str # Column name in dataset is glyburide-metformin
+    glipizide_metformin: str # Column name in dataset is glipizide-metformin
+    glimepiride_pioglitazone: str # Column name in dataset is glimepiride-pioglitazone
+    metformin_rosiglitazone: str # Column name in dataset is metformin-rosiglitazone
+    metformin_pioglitazone: str # Column name in dataset is metformin-pioglitazone
+    change: str
+    diabetesMed: str
+
+    class Config:
+        alias_generator = lambda string: string.replace("_", "-")
+        allow_population_by_field_name = True
+
+class InferenceResponse(BaseModel):
+    prediction: int
+    probability_score: float
+
+# --- API Endpoints (to be defined later) ---
+
+# Health check endpoint
+@app.get("/health")
+async def health():
+    # Basic health check
+    if model_pipeline is not None:
+        return {"status": "ok", "message": "API is healthy and model is loaded."}
+    else:
+        # This case might indicate the startup event hasn't finished or failed
+        return {"status": "ok", "message": "API is healthy, but model is not loaded yet or loading failed."}
+
+# --- Startup and Shutdown Events (Model loading will go here) ---
+@app.on_event("startup")
+async def startup_event():
+    global model_pipeline
+    logger.info("Attempting to load model and preprocessor on startup...")
+    try:
+        logger.info(f"Setting MLflow tracking URI to: {MLFLOW_TRACKING_URI}")
+        mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
+        
+        model_uri = f"models:/{DEFAULT_MODEL_NAME}/{DEFAULT_MODEL_STAGE}"
+        logger.info(f"Attempting to load model from URI: {model_uri}")
+        
+        model_pipeline = mlflow.sklearn.load_model(model_uri)
+        logger.info(f"Successfully loaded model '{DEFAULT_MODEL_NAME}' from stage '{DEFAULT_MODEL_STAGE}'.")
+        
+        # Verify if the loaded object is a scikit-learn pipeline (optional check)
+        if hasattr(model_pipeline, 'steps'):
+            logger.info("Model appears to be a scikit-learn pipeline.")
+            # You could further inspect model_pipeline.steps to see the preprocessor and model
+        else:
+            logger.warning("Loaded model may not be a scikit-learn pipeline. Ensure preprocessor is included.")
+            
+    except Exception as e:
+        logger.error(f"Error loading model '{DEFAULT_MODEL_NAME}' from stage '{DEFAULT_MODEL_STAGE}': {e}")
+        logger.exception("Full traceback:") # Logs the full exception traceback
+        model_pipeline = None # Ensure it's None if loading fails
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    logger.info("API shutting down.")
+
+# --- API Endpoints --- 
+@app.post("/predict", response_model=InferenceResponse)
+async def predict(input_data: InferenceInput):
+    global model_pipeline
+    if model_pipeline is None:
+        logger.error("Model pipeline is not loaded. API cannot make predictions.")
+        raise HTTPException(status_code=503, detail="Model not loaded. API not ready for predictions.")
+
+    try:
+        # Convert Pydantic model to DataFrame, handling hyphenated keys
+        input_dict = input_data.dict(by_alias=True)
+        input_df = pd.DataFrame([input_dict])
+        logger.info(f"Received input for prediction (first row): \n{input_df.head(1).to_string()}")
+
+        # Apply cleaning from src.feature_engineering
+        cleaned_df = clean_data(input_df.copy())
+        logger.info("Applied clean_data successfully.")
+
+        # Apply feature engineering from src.feature_engineering
+        # This function should create 'age_ordinal', drop 'age', and ensure other features are ready for the preprocessor part of model_pipeline
+        # It must gracefully handle not having 'readmitted' column (which is true for API input)
+        engineered_df = engineer_features(cleaned_df.copy())
+        logger.info("Applied engineer_features successfully.")
+        
+        # Log columns and a sample row before prediction for debugging
+        logger.debug(f"DataFrame columns for prediction: {engineered_df.columns.tolist()}")
+        if not engineered_df.empty:
+            logger.debug(f"DataFrame head for prediction (after engineering):\n{engineered_df.head(1).to_string()}")
+        else:
+            logger.warning("DataFrame is empty after feature engineering.")
+            raise ValueError("DataFrame became empty after feature engineering steps.")
+
+        # Perform prediction using the loaded pipeline (preprocessor + model)
+        # predict() returns an array of predictions
+        prediction_val = model_pipeline.predict(engineered_df)[0]
+        # predict_proba() returns an array of [[P(class_0), P(class_1)]]
+        proba_val = model_pipeline.predict_proba(engineered_df)[0]
+        
+        # The second element in proba_val corresponds to the probability of the positive class (readmission)
+        positive_class_proba = proba_val[1]
+        
+        logger.info(f"Prediction: {prediction_val}, Probability of readmission: {positive_class_proba:.4f}")
+
+        return InferenceResponse(
+            prediction=int(prediction_val),
+            probability_score=float(positive_class_proba)
+        )
+    except HTTPException: # Re-raise HTTPExceptions to return proper responses
+        raise
+    except ValueError as ve:
+        logger.error(f"ValueError during prediction: {ve}")
+        logger.exception("Full traceback for ValueError in prediction:")
+        raise HTTPException(status_code=400, detail=f"Invalid input or data processing error: {str(ve)}")
+    except Exception as e:
+        logger.error(f"Unexpected error during prediction: {e}")
+        logger.exception("Full traceback for unexpected error in prediction:")
+        raise HTTPException(status_code=500, detail=f"Error during prediction: {str(e)}")
+
+if __name__ == "__main__":
+    import uvicorn
+    # This is for local debugging. In production, Uvicorn will be run by Docker/K8s.
+    uvicorn.run(app, host="0.0.0.0", port=8000) 

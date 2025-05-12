@@ -277,11 +277,50 @@
 
 **Phase 3: API Development & Deployment to Local K8s (Weeks 5-6)**
 
-1.  **API Development (FastAPI):** (No significant changes, ensure it uses MLflow client to load model/transformer from MLflow server/S3)
-    * [ ] Create API code (`/src/api/main.py`) using FastAPI, Pydantic.
-    * [ ] Load model/transformer on startup from MLflow (needs MLflow tracking URI and S3 access).
-    * [ ] Define `/predict` and `/health` endpoints.
-    * [ ] Create `requirements.txt`.
+1.  **API Development (FastAPI):** This step focuses on creating a robust and production-ready API for serving the trained patient readmission prediction model. It involves setting up the FastAPI application, loading the model and preprocessor from MLflow, defining request/response schemas, and implementing the core prediction logic.
+    * [x] **Create API Code Structure (`/src/api/main.py`):**
+        *   Initialize a FastAPI application instance.
+        *   Import necessary libraries: `fastapi`, `pydantic`, `mlflow`, `pandas`, `numpy`, `os`, `logging`, and any specific model libraries (e.g., `sklearn`, `xgboost`).
+        *   Set up basic logging configuration (e.g., logging level, format).
+        *   Define global variables for MLflow tracking URI, model name, and model stage (e.g., "Production"). These should ideally be configurable via environment variables.
+    * [x] **Load Model and Preprocessor on Startup:**
+        *   Implement a startup event handler (e.g., using `@app.on_event("startup")`) in FastAPI.
+        *   Inside the startup handler:
+            *   Set the MLflow tracking URI using `mlflow.set_tracking_uri()`. Consider fetching from `os.getenv("MLFLOW_TRACKING_URI", "http://mlflow:5000")`.
+            *   Construct the model URI for the desired model stage (e.g., `f"models:/{MODEL_NAME}/{MODEL_STAGE}"`).
+            *   Load the Scikit-learn flavor model using `mlflow.sklearn.load_model(model_uri=model_uri)`. This will load the model pipeline which should include the preprocessor if logged correctly.
+            *   Store the loaded model/pipeline in a global variable or application state for access by endpoint functions.
+            *   Log successful model loading or any errors encountered.
+        *   **Note on Preprocessor:** If the preprocessor was logged separately from the model pipeline in MLflow (e.g., as a distinct artifact), load it similarly using its MLflow run ID and artifact path. Ensure the API uses the *exact same* preprocessor version that the model was trained with.
+    * [x] **Define Pydantic Models for Request and Response:**
+        *   Create a Pydantic model (e.g., `InferenceInput`) to define the expected input features and their data types for the `/predict` endpoint. This should mirror the raw input features before preprocessing.
+        *   Create a Pydantic model (e.g., `InferenceResponse`) to define the structure of the prediction response (e.g., including `prediction` (0 or 1) and optionally `probability_score`).
+    * [x] **Implement `/predict` Endpoint:**
+        *   Define a POST endpoint (e.g., `@app.post("/predict", response_model=InferenceResponse)`).
+        *   The endpoint function should accept an argument of type `InferenceInput`.
+        *   Convert the input Pydantic model to a Pandas DataFrame suitable for the preprocessor/model.
+        *   Apply `clean_data` and `engineer_features` (from `src.feature_engineering`) to the DataFrame. Ensure these functions are adapted or called correctly for API inference (e.g., handling absence of target variable, ensuring correct feature set for the preprocessor in `model_pipeline`).
+        *   Perform prediction using the loaded `model_pipeline` (which includes the preprocessor and model) (e.g., `model_pipeline.predict(input_df)` and `model_pipeline.predict_proba(input_df)`).
+        *   Return the prediction result formatted according to `InferenceResponse`.
+        *   Implement robust error handling (e.g., for invalid input data, model prediction errors, model not loaded).
+    * [x] **Implement `/health` Endpoint:**
+        *   Define a GET endpoint (e.g., `@app.get("/health")`).
+        *   This endpoint should return a simple JSON response indicating the API status (e.g., `{"status": "ok"}`).
+        *   Optionally, it can check the status of critical components like model loading.
+    * [x] **Create API `requirements.txt`:**
+        *   Create a file named `requirements.txt` in the `/src/api/` directory.
+        *   List all Python dependencies required to run the FastAPI application, including:
+            *   `fastapi`
+            *   `uvicorn[standard]` (for running the server)
+            *   `pydantic`
+            *   `mlflow`
+            *   `pandas`
+            *   `numpy`
+            *   `scikit-learn`
+            *   `xgboost` (if XGBoost model is used)
+            *   `python-dotenv` (if using .env files for configuration)
+            *   Any other specific libraries used by the model or feature engineering steps if they are re-executed or part of the model object.
+        *   Specify versions for key packages to ensure reproducibility (e.g., `fastapi==0.100.0`, `mlflow==2.3.0`).
 
 2.  **Containerization:** (No changes needed here)
     * [ ] Create Dockerfile (`/src/api/Dockerfile`).

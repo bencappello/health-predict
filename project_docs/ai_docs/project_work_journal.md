@@ -367,3 +367,92 @@
   - The script confirmed that `HealthPredict_LogisticRegression`, `HealthPredict_RandomForest`, and `HealthPredict_XGBoost` are registered, their latest versions (v6 for this run) are in "Production", and their source run tags are correct.
 - All verification steps passed. Phase 2, Step 3, Task 3 is now complete.
 - Updated `project_steps.md` to reflect completion.
+
+## $(date +'%Y-%m-%d %H:%M:%S') - Updated API Development Steps in Project Plan
+
+- Reviewed user request to enhance the detail of API development steps in `project_steps.md`.
+- Read the existing `project_steps.md` to locate Phase 3, Step 1.
+- Rewritten the bullet points under Phase 3, Step 1 ("API Development (FastAPI)") to provide comprehensive descriptions and detailed sub-tasks for:
+    - Creating the API code structure (`/src/api/main.py`).
+    - Loading the model and preprocessor from MLflow on application startup.
+    - Defining Pydantic models for request and response schemas.
+    - Implementing the `/predict` endpoint with input validation and prediction logic.
+    - Implementing a `/health` check endpoint.
+    - Creating a `requirements.txt` file for the API's Python dependencies.
+- The changes were applied to `project_docs/ai_docs/project_steps.md`.
+
+## $(date +'%Y-%m-%d %H:%M:%S') - Created Initial API Structure
+
+- Executed Phase 3, Step 1, Bullet 1 from `project_steps.md`.
+- Created the initial API code structure in `src/api/main.py`.
+- The `main.py` file includes:
+    - FastAPI app initialization.
+    - Necessary imports (`fastapi`, `pydantic`, `mlflow`, `pandas`, `numpy`, `os`, `logging`).
+    - Basic logging setup.
+    - Placeholder global variables for MLflow configuration and the model pipeline.
+    - Placeholder Pydantic models for `InferenceInput` and `InferenceResponse`.
+    - A basic `/health` endpoint.
+    - Startup and shutdown event handlers with a placeholder for model loading logic.
+    - A `__main__` block for local Uvicorn execution.
+- Updated `project_steps.md` to mark this sub-task as complete.
+
+## $(date +'%Y-%m-%d %H:%M:%S') - Implemented Model Loading in API Startup
+
+- Executed Phase 3, Step 1, Bullet 2 from `project_steps.md`.
+- Modified the `startup_event` function in `src/api/main.py` to load the ML model and preprocessor.
+- The startup logic now:
+    - Sets the MLflow tracking URI (defaults to `http://mlflow:5000` or uses `MLFLOW_TRACKING_URI` env var).
+    - Constructs the model URI for `HealthPredict_RandomForest` model from the `Production` stage.
+    - Uses `mlflow.sklearn.load_model()` to load the model pipeline.
+    - Stores the loaded pipeline in the global `model_pipeline` variable.
+    - Includes error handling and logging for the loading process.
+- Updated `project_steps.md` to mark this sub-task as complete.
+
+## $(date +'%Y-%m-%d %H:%M:%S') - Defined API Request/Response Models
+
+- Executed Phase 3, Step 1, Bullet 3 from `project_steps.md`.
+- Defined Pydantic models in `src/api/main.py`:
+    - `InferenceInput`: Includes 44 features expected by the raw input layer of the prediction pipeline, with appropriate data types (`str`, `int`, `Optional[str]`). Added a Pydantic `Config` for alias generation to handle hyphens in input JSON keys.
+    - `InferenceResponse`: Defines the prediction output structure (`prediction: int`, `probability_score: float`).
+- Added `from typing import Optional` to `src/api/main.py`.
+- Updated `project_steps.md` to mark this sub-task as complete.
+
+## $(date +'%Y-%m-%d %H:%M:%S') - Implemented /predict Endpoint in API
+
+- Executed Phase 3, Step 1, Bullet 4 from `project_steps.md`.
+- Implemented the `/predict` endpoint in `src/api/main.py`.
+- The endpoint logic includes:
+    - Checking if the `model_pipeline` (preprocessor + model) is loaded.
+    - Accepting `InferenceInput` (Pydantic model).
+    - Converting input to a Pandas DataFrame (handling hyphenated JSON keys via Pydantic `by_alias=True`).
+    - Applying `clean_data` and `engineer_features` from `src.feature_engineering` to the input DataFrame.
+    - Using the loaded `model_pipeline` to get predictions and probability scores.
+    - Returning results formatted as `InferenceResponse`.
+    - Robust error handling with `HTTPException` for issues like model not loaded, invalid input, or prediction errors.
+    - Added a `try-except` block for `src.feature_engineering` imports with dummy fallbacks for easier local development (to be addressed for production).
+- Updated `project_steps.md` to mark this sub-task as complete.
+
+## $(date +'%Y-%m-%d %H:%M:%S') - Confirmed /health Endpoint Implementation
+
+- Executed Phase 3, Step 1, Bullet 5 from `project_steps.md`.
+- Reviewed the existing `/health` endpoint in `src/api/main.py`.
+- Confirmed that the current implementation meets the requirements:
+    - It is a GET endpoint.
+    - It returns a JSON response with API status.
+    - It checks and reports the model loading status.
+- Updated `project_steps.md` to mark this sub-task as complete, as no code changes were needed.
+
+## $(date +'%Y-%m-%d %H:%M:%S') - Created API requirements.txt
+
+- Executed Phase 3, Step 1, Bullet 6 from `project_steps.md`.
+- Created `src/api/requirements.txt` with the following Python dependencies and versions:
+    - `fastapi==0.111.0`
+    - `uvicorn[standard]==0.30.1`
+    - `pydantic==2.8.2`
+    - `mlflow==2.14.1`
+    - `pandas==2.2.2`
+    - `numpy==1.26.4`
+    - `scikit-learn==1.5.1`
+    - `xgboost==2.1.0`
+    - `python-dotenv==1.0.1`
+- Updated `project_steps.md` to mark this sub-task as complete.
