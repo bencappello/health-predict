@@ -11,6 +11,9 @@ COPY src/api/requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
+# Explicitly install boto3 in a separate step for debugging
+RUN pip install --no-cache-dir boto3==1.28.57
+
 # Copy the entire src directory into the /app/src directory in the image
 COPY src ./src
 
