@@ -73,7 +73,6 @@ run_training_and_hpo = BashOperator(
 )
 
 # Function to find and register the best model in MLflow
-"""
 def find_and_register_best_model(**kwargs):
     # Set MLflow tracking URI
     mlflow_uri = kwargs['params']['mlflow_uri']
@@ -86,77 +85,82 @@ def find_and_register_best_model(**kwargs):
     experiment = mlflow.get_experiment_by_name(experiment_name)
     if experiment is None:
         print(f"Experiment '{experiment_name}' not found. Creating it.")
+        # This case should ideally not happen if train_model.py runs first and creates it.
+        # If it can, then create_experiment should be used carefully, or error out.
+        # For now, proceeding as per original commented code's implied logic.
         experiment_id = mlflow.create_experiment(experiment_name)
     else:
         experiment_id = experiment.experiment_id
     
     print(f"Using experiment ID: {experiment_id}")
     
-    # Search for runs with F1 score metrics
+    # Search for runs that are tagged as the best HPO model
     runs = mlflow.search_runs(
         experiment_ids=[experiment_id],
-        filter_string="metrics.val_f1_score > 0",
-        order_by=["metrics.val_f1_score DESC"]
+        filter_string="tags.best_hpo_model = 'True'", # Find the parent "Best Model" runs
+        order_by=["metrics.val_f1_score DESC"] # Still useful if multiple runs somehow get this tag or for consistency
     )
     
     if runs.empty:
-        print("No runs found with validation F1 score metrics")
+        print("No runs found tagged as 'best_hpo_model = True'")
         return
     
-    # Group by model type and find the best model of each type
-    model_types = runs['tags.model_name'].unique()
-    
+    # Iterate through the identified best model runs
+    # Each of these runs should correspond to a specific model type already.
     registered_models = []
     
-    for model_type in model_types:
-        if pd.isna(model_type):
-            continue
-            
-        model_runs = runs[runs['tags.model_name'] == model_type]
-        if model_runs.empty:
-            continue
-            
-        best_run = model_runs.iloc[0]
+    for idx, best_run in runs.iterrows():
         best_run_id = best_run['run_id']
-        f1_score = best_run['metrics.val_f1_score']
+        model_type = best_run['tags.model_name'] # Relies on 'model_name' tag being present in these "Best" runs
+        f1_score = best_run['metrics.val_f1_score'] # Relies on 'val_f1_score' being present
         
-        print(f"Best {model_type} model: Run ID {best_run_id}, F1 Score: {f1_score:.4f}")
-        
-        # Look up the run to get artifacts URI
-        best_run_details = mlflow.get_run(best_run_id)
+        if pd.isna(model_type):
+            print(f"Skipping run {best_run_id} due to missing 'tags.model_name'.")
+            continue
+            
+        print(f"Processing Best {model_type} model: Run ID {best_run_id}, F1 Score: {f1_score:.4f}")
         
         # Register the model in MLflow Model Registry
         try:
+            # The model_uri "runs:/{run_id}/model" assumes the final model in the "Best...Model" run
+            # was logged with the default artifact_path="model" by mlflow.sklearn.log_model (or equivalent)
+            model_uri = f"runs:/{best_run_id}/model"
+            registered_model_name = f"HealthPredict_{model_type}"
+
             registered_model = mlflow.register_model(
-                model_uri=f"runs:/{best_run_id}/model",
-                name=f"HealthPredict_{model_type}"
+                model_uri=model_uri,
+                name=registered_model_name
             )
-            registered_models.append({
-                'model_type': model_type,
-                'run_id': best_run_id,
-                'f1_score': f1_score,
-                'registered_model': registered_model.name,
-                'version': registered_model.version
-            })
             
             # Transition model to Production stage
-            client = mlflow.tracking.MlflowClient()
+            client = mlflow.tracking.MlflowClient() # Renamed from mlflow. MlflowClient()
             client.transition_model_version_stage(
                 name=registered_model.name,
                 version=registered_model.version,
                 stage="Production"
             )
             
-            print(f"Registered {model_type} model as '{registered_model.name}' version {registered_model.version} in Production stage")
+            registered_models.append({
+                'model_type': model_type,
+                'run_id': best_run_id,
+                'f1_score': f1_score,
+                'registered_model': registered_model.name,
+                'version': registered_model.version,
+                'stage': 'Production'
+            })
+            
+            print(f"Registered {model_type} model as '{registered_model.name}' version {registered_model.version} and transitioned to Production stage.")
             
         except Exception as e:
-            print(f"Error registering {model_type} model: {str(e)}")
+            print(f"Error registering or transitioning {model_type} model (Run ID: {best_run_id}): {str(e)}")
+            # Optionally, log more details or re-raise if critical
+            
+    if not registered_models:
+        print("No models were successfully registered.")
     
     return registered_models
-"""
 
 # Task 2: Find and register the best model in MLflow
-"""
 find_and_register_best_model_task = PythonOperator(
     task_id='find_and_register_best_model',
     python_callable=find_and_register_best_model,
@@ -169,7 +173,6 @@ find_and_register_best_model_task = PythonOperator(
 
 # Define the task dependencies
 run_training_and_hpo >> find_and_register_best_model_task 
-"""
 
 # Define the task dependencies for the training task only (since registration is commented out)
-run_training_and_hpo 
+# run_training_and_hpo # This line should be removed or commented out 

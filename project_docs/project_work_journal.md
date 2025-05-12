@@ -339,3 +339,31 @@
   - Update project_work_journal.md to reflect the current status of the model registration task.
   - Modify training_pipeline_dag.py to ensure correct task execution and set RAY_NUM_SAMPLES to 2 for testing.
   ``` 
+
+## $(date +'%Y-%m-%d %H:%M:%S') - Implemented Model Registration Task in Airflow DAG
+
+- Reviewed `project_steps.md` for Phase 2, Step 3, Task 3: Implement MLflow model registration.
+- Edited `mlops-services/dags/training_pipeline_dag.py`:
+  - Uncommented the `find_and_register_best_model` Python function.
+  - Modified the function's `mlflow.search_runs` call to use `filter_string="tags.best_hpo_model = 'True'"` to correctly identify the final "Best Model" runs as per the project documentation clarification.
+  - Ensured the model registration uses `model_uri=f"runs:/{best_run_id}/model"` and transitions models to the "Production" stage.
+  - Uncommented the `find_and_register_best_model_task` PythonOperator.
+  - Updated the DAG task dependencies to `run_training_and_hpo >> find_and_register_best_model_task`.
+  - Commented out the previous temporary single-task dependency.
+- The DAG is now configured to run the training/HPO pipeline and then register the best resulting models for each type (LogisticRegression, RandomForest, XGBoost) into the MLflow Model Registry.
+- Next step is for the user to trigger the DAG in Airflow and verify the model registration in both Airflow logs and MLflow UI.
+
+## $(date +'%Y-%m-%d %H:%M:%S') - Verified Model Registration Task via CLI and Script
+
+- Continued execution of revised "Detailed Implementation Guide for Task 3 (AI Agent Focused)" in `project_steps.md`.
+- Triggered the `health_predict_training_hpo` Airflow DAG using `docker-compose exec airflow-scheduler airflow dags trigger health_predict_training_hpo`.
+  - DAG Run ID: `manual__2025-05-12T01:53:53+00:00` (Execution Date: `2025-05-12T01:53:53+00:00`).
+- Monitored DAG and task status using Airflow CLI commands (`dags state`, `tasks state`):
+  - Both `run_training_and_hpo` and `find_and_register_best_model` tasks completed successfully.
+- Retrieved and analyzed logs for `find_and_register_best_model_task` by directly accessing the log file path (`/opt/airflow/logs/dag_id=.../run_id=.../task_id=.../attempt=1.log`) inside the `airflow-scheduler` container.
+  - Logs confirmed successful processing and registration of RandomForest, XGBoost, and LogisticRegression models, with multiple versions created and transitioned to "Production" due to the `RAY_NUM_SAMPLES=2` HPO setup resulting in multiple runs tagged as `best_hpo_model='True'` for each model type.
+- Created `scripts/verify_mlflow_registration.py` to programmatically check MLflow Model Registry via its Python API.
+- Executed `verify_mlflow_registration.py` using `docker-compose exec jupyterlab python3 ...`.
+  - The script confirmed that `HealthPredict_LogisticRegression`, `HealthPredict_RandomForest`, and `HealthPredict_XGBoost` are registered, their latest versions (v6 for this run) are in "Production", and their source run tags are correct.
+- All verification steps passed. Phase 2, Step 3, Task 3 is now complete.
+- Updated `project_steps.md` to reflect completion.
