@@ -35,7 +35,7 @@ env_vars = {
     'TRAIN_KEY': 'processed_data/initial_train.csv',
     'VALIDATION_KEY': 'processed_data/initial_validation.csv',
     'TARGET_COLUMN': 'readmitted_binary',
-    'RAY_NUM_SAMPLES': '10',  # Number of HPO trials
+    'RAY_NUM_SAMPLES': '2',  # Number of HPO trials - reduced to 2 for quick verification
     'RAY_MAX_EPOCHS': '10',
     'RAY_GRACE_PERIOD': '5',
     'RAY_LOCAL_DIR': '/opt/airflow/ray_results_airflow_hpo',
@@ -169,4 +169,7 @@ find_and_register_best_model_task = PythonOperator(
 
 # Define the task dependencies
 run_training_and_hpo >> find_and_register_best_model_task 
-""" 
+"""
+
+# Define the task dependencies for the training task only (since registration is commented out)
+run_training_and_hpo 

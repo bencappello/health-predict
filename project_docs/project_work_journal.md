@@ -305,3 +305,37 @@
   - LogisticRegression: F1 score improved from ~0.27 to 0.61
 - All models are now performing comparably well, with F1 scores above 0.60.
 - The relative performance ranking has changed, with XGBoost now competitive with RandomForest.
+
+## 2025-05-11 23:30:00 - Implemented and Tested Training Pipeline DAG
+
+- Created and implemented `mlops-services/dags/training_pipeline_dag.py` with:
+  - Proper DAG configuration (schedule_interval=None for manual triggering, start_date, catchup=False)
+  - Environment variable definitions for training script parameters
+  - Main training task using BashOperator to execute train_model.py with appropriate parameters
+  - Model registration task code is prepared but currently commented out for future implementation
+- Successfully tested the training task execution:
+  - DAG properly executes the training script
+  - Training runs complete with expected metrics:
+    - RandomForest F1: 0.6276 (best)
+    - XGBoost F1: 0.6259
+    - LogisticRegression F1: 0.6065
+  - All models and artifacts are correctly logged to MLflow
+  - Airflow logs show clean execution with proper error handling
+- Updated project documentation:
+  - Marked Phase 2, Step 3 (Airflow DAG) tasks as complete, except for model registration task
+  - Added detailed execution logs to project work journal
+- Next steps:
+  - Implement and test the model registration task in the DAG (currently commented out)
+  - Begin work on API development and deployment phase
+
+## $(date +'%Y-%m-%d %H:%M:%S') - System Documentation and Model Registry Task Update
+
+- Committed changes with the following message:
+  ```
+  docs: Add system overview and update project steps for model registry
+  
+  - Create comprehensive system_overview.md for project understanding.
+  - Add detailed instructions to project_steps.md for implementing the MLflow model registration task in the Airflow DAG.
+  - Update project_work_journal.md to reflect the current status of the model registration task.
+  - Modify training_pipeline_dag.py to ensure correct task execution and set RAY_NUM_SAMPLES to 2 for testing.
+  ``` 
