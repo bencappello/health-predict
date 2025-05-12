@@ -92,78 +92,185 @@
     * [x] Define DAG schedule/args.
     * [x] Task 1: Optional data split.
     * [x] **Task 2 (`BashOperator`/`PythonOperator`):** Execute `train_model.py`. Pass MLflow tracking URI pointing to the MLflow container on EC2 (e.g., `http://<mlflow-service-name>:5000` or `http://localhost:5000` depending on network mode/execution context). Ensure EC2 role allows S3 access.
-    * [ ] Task 3: Use MLflow client API to find and register the best model in MLflow Model Registry.
-      **Detailed Implementation Guide for Task 3:**
+    * [x] **Task 3: Use MLflow client API to find and register the best model in MLflow Model Registry.**
+      **Revised Detailed Implementation Guide for Task 3 (AI Agent Focused):**
 
-      This task involves enabling and verifying the `find_and_register_best_model_task` within the `mlops-services/dags/training_pipeline_dag.py` Airflow DAG. This task will use the MLflow client API to identify the best performing model for each type (Logistic Regression, Random Forest, XGBoost) from the HPO runs and register them into the MLflow Model Registry, transitioning them to the "Production" stage.
+      This task involves enabling, verifying, and troubleshooting the `find_and_register_best_model_task` within the `mlops-services/dags/training_pipeline_dag.py` Airflow DAG. This task uses the MLflow client API to identify the best performing models and register them.
 
-      **Steps:**
+      **Prerequisites (Assumed already completed by AI Agent in previous steps):**
 
-      1.  **Open the DAG File:**
-          *   Navigate to and open `mlops-services/dags/training_pipeline_dag.py`.
+      *   The file `mlops-services/dags/training_pipeline_dag.py` has been edited to:
+          *   Uncomment the `find_and_register_best_model` Python function.
+          *   Modify the function's `mlflow.search_runs` call to use `filter_string="tags.best_hpo_model = 'True'"`.
+          *   Ensure model registration uses `model_uri=f"runs:/{best_run_id}/model"` and transitions to "Production".
+          *   Uncomment the `find_and_register_best_model_task` PythonOperator.
+          *   Update DAG task dependencies to `run_training_and_hpo >> find_and_register_best_model_task`.
 
-      2.  **Locate and Review the `find_and_register_best_model` Function:**
-          *   This Python function is currently commented out using triple quotes (`"""`).
-          *   **Key logic to verify within the function:**
-              *   **MLflow Setup:** `mlflow.set_tracking_uri()` and `mlflow.get_experiment_by_name()` (or `mlflow.create_experiment()`) should correctly connect to your MLflow server and the designated experiment (e.g., `HealthPredict_Training_HPO_Airflow`). These are passed as `kwargs['params']`.
-              *   **Experiment Search:** `mlflow.search_runs()` is used to find relevant runs. Confirm:
-                  *   `experiment_ids` is correctly set.
-                  *   `filter_string` (e.g., `"metrics.val_f1_score > 0"`) is appropriate for finding valid HPO child runs (ensure the metric like `val_f1_score` matches what `train_model.py` logs for HPO trials).
-                  *   `order_by` (e.g., `["metrics.val_f1_score DESC"]`) correctly sorts runs to find the best ones.
-              *   **Iterating Model Types:** The function iterates through `model_types = runs['tags.model_name'].unique()`. This relies on the `model_name` tag being set correctly during the HPO trials in `train_model.py`.
-              *   **Identifying Best Run per Type:** For each `model_type`, it filters runs and selects the top one.
-              *   **Model Registration Call (`mlflow.register_model()`):**
-                  *   `model_uri`: Should be in the format `f"runs:/{best_run_id}/model"`. The `best_run_id` refers to the HPO trial run that logged the model artifact (usually under an implicit `/model` path if `mlflow.sklearn.log_model` was used with default artifact path in the HPO trial, or the explicitly logged final model from the "Best_<ModelType>_Model" run).
-                      *   **IMPORTANT CLARIFICATION**: The `train_model.py` script, after HPO, trains a *final* "Best_<ModelType>_Model" and logs its artifacts. The `find_and_register_best_model` function should ideally register *these* dedicated "Best_<ModelType>_Model" runs, not an individual HPO trial run. The current commented code iterates through `runs` from `mlflow.search_runs` which are HPO trials. This logic might need adjustment to specifically target the parent runs named `"Best_{model_type}_Model"` or it should correctly identify the best HPO *trial* that *also logged a usable model artifact*. For simplicity and directness, ensure the `mlflow.search_runs` targets the main runs where `best_hpo_model == "True"` tag is set and `tags.model_name` is present.
-                      *   Alternatively, if the goal is to register the distinct "Best_<ModelType>_Model" parent runs (which is cleaner), the search query should be `filter_string="tags.best_hpo_model = 'True'"` and then group/select by `tags.model_name`.
-                  *   `name`: The name for the registered model. `f"HealthPredict_{model_type}"` is a good convention.
-              *   **Model Stage Transition:** `client.transition_model_version_stage()` is used. The current code transitions to `"Production"`. This aligns with demonstrating end-to-end capability. For a real-world scenario, "Staging" might be an initial step, but "Production" is acceptable for this project's demonstration goals.
-              *   **Error Handling:** Ensure `try-except` blocks adequately catch and log potential errors during registration or transition.
-              *   **Return Value:** The function returns a list of registered model details, which is good for logging by the `PythonOperator`.
+      **Execution & Verification Steps (To be performed by AI Agent):**
 
-      3.  **Uncomment the `find_and_register_best_model` Function:**
-          *   Remove the leading and trailing triple quotes (`"""`) that are commenting out the entire function block.
+      1.  **Ensure DAG File is Updated on EC2:**
+          *   Confirm that the latest version of `mlops-services/dags/training_pipeline_dag.py` (with the model registration logic enabled) is present on the EC2 instance in the correct location for Airflow to pick up. *(This is typically handled when the AI uses an `edit_file` tool targeting the EC2 path, but good to state).*
 
-      4.  *Locate and Uncomment the `PythonOperator` Task (`find_and_register_best_model_task`):*
-          *   This task definition is also commented out using triple quotes.
-          *   Remove these triple quotes.
-          *   Ensure `python_callable` is set to `find_and_register_best_model`.
-          *   Verify `params` correctly pass `mlflow_uri` and `experiment_name` from the DAG's `env_vars` to the Python function.
+      2.  **Trigger the Airflow DAG via CLI:**
+          *   **Instruction:** Use a terminal command to trigger the `health_predict_training_hpo` DAG.
+          *   **Command:**
+              ```bash
+              docker-compose -f ~/health-predict/mlops-services/docker-compose.yml exec airflow-scheduler airflow dags trigger health_predict_training_hpo
+              ```
+          *   **Expected Output:** Confirmation of DAG trigger (e.g., "DAG 'health_predict_training_hpo' triggered"). Note the `run_id` if provided, or you'll need to fetch it in the next step.
 
-      5.  **Update Task Dependencies:**
-          *   At the end of the DAG file, the task dependencies are defined.
-          *   The line `run_training_and_hpo >> find_and_register_best_model_task` (which is likely commented out with the `PythonOperator` task) sets the correct order. Uncomment this line.
-          *   Remove the temporary single-task definition line: `run_training_and_hpo` (this line was added previously to allow the DAG to run with only the first task).
-          *   The final dependency definition should be: `run_training_and_hpo >> find_and_register_best_model_task`.
+      3.  **Monitor DAG Run Status and Task Completion via CLI:**
+          *   **Instruction:** Periodically check the status of the DAG run and its tasks until completion or failure.
+          *   **a. Get Latest DAG Run ID (if not noted from trigger step):**
+              *   **Command:**
+                  ```bash
+                  docker-compose -f ~/health-predict/mlops-services/docker-compose.yml exec airflow-scheduler airflow dags list-runs -d health_predict_training_hpo -o plain --no-header | grep -E 'manual__|scheduled__' | tail -n 1 | awk '{print $1}'
+                  ```
+              *   Store the output as `DAG_RUN_ID`.
+          *   **b. Check Overall DAG Run Status:**
+              *   **Command (replace `YOUR_DAG_RUN_ID` with the stored `DAG_RUN_ID`):**
+                  ```bash
+                  # First, get the execution date string for the specific DAG_RUN_ID
+                  EXECUTION_DATE_STR=$(docker-compose -f ~/health-predict/mlops-services/docker-compose.yml exec airflow-scheduler airflow dags list-runs -d health_predict_training_hpo -o plain --no-header | grep "YOUR_DAG_RUN_ID" | awk '{print $3" "$4}')
+                  # Then, get the report
+                  docker-compose -f ~/health-predict/mlops-services/docker-compose.yml exec airflow-scheduler airflow dags report health_predict_training_hpo --start-date "$EXECUTION_DATE_STR" | grep -A 1 "YOUR_DAG_RUN_ID"
+                  ```
+              *   **Expected Output Analysis:** Look for `state=success` for the DAG run. If `state=failed` or `state=running` after a reasonable time, proceed to check task logs.
+          *   **c. Check Task Instance Status (if DAG is successful or for debugging):**
+              *   **Command (replace `YOUR_DAG_RUN_ID` with the stored `DAG_RUN_ID`):**
+                  ```bash
+                  docker-compose -f ~/health-predict/mlops-services/docker-compose.yml exec airflow-scheduler airflow tasks list health_predict_training_hpo YOUR_DAG_RUN_ID
+                  ```
+              *   **Expected Output Analysis:** Verify `run_training_and_hpo` and `find_and_register_best_model` tasks are listed and show `success`.
 
-      6.  **Testing and Verification:**
-          *   **Save `training_pipeline_dag.py`.** Airflow will need to re-parse it.
-          *   **Trigger the DAG:** Manually trigger the `health_predict_training_hpo` DAG via the Airflow UI or CLI.
-          *   **Monitor Execution in Airflow UI:**
-              *   Verify that the `run_training_and_hpo` task completes successfully.
-              *   Verify that the `find_and_register_best_model_task` then runs and completes successfully.
-              *   Check the logs for `find_and_register_best_model_task`. Look for print statements indicating: 
-                  *   Connection to MLflow.
-                  *   Experiment ID being used.
-                  *   Successful fetching of runs.
-                  *   Identification of best models for each type (LogisticRegression, RandomForest, XGBoost).
-                  *   Printouts confirming model registration (e.g., `Registered <ModelType> model as 'HealthPredict_<ModelType>' version <X> in Production stage`).
-                  *   Any errors encountered.
-          *   **Verify in MLflow UI:**
-              *   Navigate to the "Models" section in the MLflow UI.
-              *   You should see new registered models: `HealthPredict_LogisticRegression`, `HealthPredict_RandomForest`, and `HealthPredict_XGBoost`.
-              *   Click on each registered model. It should have at least one version.
-              *   The latest version for each should be in the "Production" stage (or the stage you configured).
-              *   The source run for the registered model version should link back to the correct "Best_<ModelType>_Model" run in the Experiments view.
+      4.  **Retrieve and Analyze Airflow Task Logs for `find_and_register_best_model_task`:**
+          *   **Instruction:** Fetch the logs for the `find_and_register_best_model_task` and parse them for specific success indicators.
+          *   **Command (replace `YOUR_DAG_RUN_ID` with the stored `DAG_RUN_ID`):**
+              ```bash
+              docker-compose -f ~/health-predict/mlops-services/docker-compose.yml exec airflow-scheduler airflow tasks logs YOUR_DAG_RUN_ID find_and_register_best_model health_predict_training_hpo
+              ```
+          *   **Log Analysis - Look for:**
+              *   `Setting MLflow tracking URI to: http://mlflow:5000`
+              *   `Using experiment ID: <experiment_id>`
+              *   `Processing Best LogisticRegression model: Run ID <run_id>, F1 Score: <score>`
+              *   `Registered LogisticRegression model as 'HealthPredict_LogisticRegression' version <X> and transitioned to Production stage.`
+              *   Similar messages for `RandomForest` and `XGBoost`.
+              *   Absence of error messages like "No runs found tagged as 'best_hpo_model = True'" or "Error registering or transitioning...".
 
-      7.  **Troubleshooting Considerations:**
-          *   **MLflow Connection Issues:** Ensure `MLFLOW_TRACKING_URI` in the DAG's `env_vars` is correct (`http://mlflow:5000`).
-          *   **Experiment Not Found:** Double-check `EXPERIMENT_NAME` consistency between the DAG and how experiments are named by `train_model.py`.
-          *   **No Runs Found:** If `mlflow.search_runs` returns empty, re-check the `filter_string` and ensure the metrics/tags it's searching for (`val_f1_score`, `tags.model_name`, `tags.best_hpo_model='True'`) are actually being logged by `train_model.py` for the relevant runs.
-          *   **Permissions:** The Airflow worker (running the PythonOperator) needs network access to the MLflow service. This is handled by Docker Compose networking. If MLflow is S3-backed for artifacts, the Airflow worker also needs S3 permissions (typically inherited if running on EC2 with an instance profile, or via AWS credentials configured for the Airflow environment).
-          *   **Model URI Issues:** If model registration fails due to URI, ensure the `model_uri` (e.g., `runs:/{run_id}/model`) correctly points to an actual MLflow-logged model artifact path. The `train_model.py` script logs models under `artifact_path=f"models/{model_name}"`. So, `runs:/{run_id}/models/{model_name}` might be the correct URI to register, or ensure that the "Best_<ModelType>_Model" run *also* logs a default model at `runs:/{run_id}/model` if that's what `register_model` expects by default for that URI scheme.
+      5.  **Verify Model Registration and Staging in MLflow Programmatically:**
+          *   **Instruction:** Create and execute a Python script on the EC2 instance (within a suitable environment like the `jupyterlab` container) to query the MLflow API.
+          *   **a. Create Verification Script (`verify_mlflow_registration.py` in `~/health-predict/scripts/` on the EC2 instance):**
+              *   **Action:** Use file editing capabilities to create `/home/jovyan/work/scripts/verify_mlflow_registration.py` inside the `jupyterlab` container (which maps to `~/health-predict/scripts/` on the EC2 host) with the following content:
+              ```python
+              import mlflow
+              import os
+              import sys # Import sys for exit codes
 
-      By following these detailed steps, the AI agent should be able to successfully implement and verify the model registration task.
+              MLFLOW_TRACKING_URI = os.getenv('MLFLOW_TRACKING_URI', 'http://mlflow:5000')
+              # EXPERIMENT_NAME = os.getenv('EXPERIMENT_NAME', 'HealthPredict_Training_HPO_Airflow') # Not directly used in this script but good for context
+              MODEL_NAMES = ["HealthPredict_LogisticRegression", "HealthPredict_RandomForest", "HealthPredict_XGBoost"]
+
+              print(f"Connecting to MLflow at {MLFLOW_TRACKING_URI}...")
+              mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
+              client = mlflow.tracking.MlflowClient()
+
+              all_checks_passed = True
+
+              for model_name in MODEL_NAMES:
+                  print(f"--- Verifying Model: {model_name} ---")
+                  try:
+                      registered_model = client.get_registered_model(model_name)
+                      # get_registered_model raises mlflow.exceptions.RestException if not found, 
+                      # so an explicit check for None might not be necessary if we let the exception be caught.
+                      # However, for clarity if the API changes or for other clients, explicit checks are safer.
+                      if not registered_model: # Defensive check
+                          print(f"ERROR: Registered model '{model_name}' not found (get_registered_model returned None/False).")
+                          all_checks_passed = False
+                          continue
+                      
+                      print(f"Found registered model: '{model_name}'.")
+                      
+                      latest_versions = registered_model.latest_versions
+                      if not latest_versions:
+                          print(f"ERROR: No versions found for model '{model_name}'.")
+                          all_checks_passed = False
+                          continue
+
+                      production_version_found = False
+                      for version_info in latest_versions:
+                          if version_info.current_stage == 'Production':
+                              production_version_found = True
+                              print(f"  Version {version_info.version} is in 'Production' stage.")
+                              print(f"    Source run_id: {version_info.run_id}")
+                              
+                              # Verify source run details
+                              try:
+                                  source_run = mlflow.get_run(version_info.run_id)
+                                  expected_model_type_tag = model_name.replace('HealthPredict_', '')
+                                  
+                                  if source_run.data.tags.get('best_hpo_model') == 'True' and \
+                                     source_run.data.tags.get('model_name') == expected_model_type_tag:
+                                      print(f"    Source run ID {version_info.run_id} tags verified (best_hpo_model='True', model_name='{expected_model_type_tag}').")
+                                  else:
+                                      print(f"ERROR: Source run ID {version_info.run_id} tags not as expected for {model_name}.")
+                                      print(f"      Expected: best_hpo_model='True', model_name='{expected_model_type_tag}'")
+                                      print(f"      Found Tags: {source_run.data.tags}")
+                                      all_checks_passed = False
+                              except Exception as e_run:
+                                  print(f"ERROR: Could not fetch or verify source run {version_info.run_id} for {model_name}: {e_run}")
+                                  all_checks_passed = False
+                              break # Found a production version, no need to check older latest_versions for this model_name
+                      
+                      if not production_version_found:
+                          print(f"ERROR: No version in 'Production' stage found for model '{model_name}'. Latest versions inspected: {[(v.version, v.current_stage) for v in latest_versions]}")
+                          all_checks_passed = False
+
+                  except mlflow.exceptions.RestException as e_rest:
+                      if "RESOURCE_DOES_NOT_EXIST" in str(e_rest) or e_rest.get_http_status_code() == 404:
+                          print(f"ERROR: Registered model '{model_name}' not found (MLflow API 404/ResourceDoesNotExist).")
+                      else:
+                          print(f"ERROR: MLflow API RestException while verifying model '{model_name}': {e_rest}")
+                      all_checks_passed = False
+                  except Exception as e_general:
+                      print(f"ERROR: A general exception occurred while verifying model '{model_name}': {e_general}")
+                      all_checks_passed = False
+                  print("-" * 40)
+
+              if all_checks_passed:
+                  print("\\nSUCCESS: All MLflow registration and staging checks passed.")
+                  sys.exit(0)
+              else:
+                  print("\\nFAILURE: Some MLflow registration or staging checks failed.")
+                  sys.exit(1)
+              ```
+          *   **b. Execute the Verification Script:**
+              *   **Command:**
+                  ```bash
+                  docker-compose -f ~/health-predict/mlops-services/docker-compose.yml exec jupyterlab python3 /home/jovyan/work/scripts/verify_mlflow_registration.py
+                  ```
+              *   **Expected Output Analysis:** Look for "SUCCESS: All MLflow registration and staging checks passed." The script will exit with code 0 for success, 1 for failure. If failures occur, the script will print detailed errors for each failed check.
+
+      **Troubleshooting Considerations (AI Agent Focused):**
+
+      *   **MLflow Connection Issues:**
+          *   If task logs or verification script show connection errors:
+              *   Verify `MLFLOW_TRACKING_URI` (`http://mlflow:5000`) is correctly defined in `env_vars` in `training_pipeline_dag.py` (AI: use `read_file`).
+              *   Verify the `mlflow` service is running: `docker-compose -f ~/health-predict/mlops-services/docker-compose.yml ps mlflow` (AI: use `run_terminal_cmd`).
+      *   **Experiment Not Found:**
+          *   If logs indicate experiment not found:
+              *   Compare `EXPERIMENT_NAME` in `training_pipeline_dag.py` with the experiment name actually used/created by `scripts/train_model.py` (AI: use `read_file` on both).
+      *   **No Runs Found (Tagged `best_hpo_model='True'`):**
+          *   If the `find_and_register_best_model_task` log shows "No runs found tagged as 'best_hpo_model='True'":
+              *   Read `scripts/train_model.py` to confirm it *is* setting the `best_hpo_model='True'` tag correctly on the final "Best Model" runs (AI: use `read_file`).
+              *   Check the `run_training_and_hpo` task logs (fetched via CLI as above) to ensure it completed successfully and logged these tags.
+      *   **Permissions (S3/MLflow):**
+          *   If logs show permission errors (e.g., to S3 for artifacts or MLflow DB):
+              *   Recall that the Airflow worker runs within a Docker container. The EC2 instance role should have S3 permissions. Docker Compose handles inter-container networking for Postgres. Focus on error messages in logs.
+      *   **Model URI Issues (e.g., `runs:/{run_id}/model` not found):**
+          *   If model registration fails because the artifact path is wrong:
+              *   Read `scripts/train_model.py`. Confirm how `mlflow.sklearn.log_model` (or equivalent) is called for the final "Best Model" runs, specifically checking the `artifact_path` argument (AI: use `read_file`). If it's not the default "model", the `model_uri` in `find_and_register_best_model` function needs adjustment.
+
+      By following these detailed, CLI- and script-oriented steps, an AI agent should be able to execute and verify this task.
 
     * [x] Upload DAG file to the mounted `/dags` directory on EC2.
     * [x] Test DAG execution. Verify results in MLflow UI (artifacts on S3, metadata in local Postgres).
