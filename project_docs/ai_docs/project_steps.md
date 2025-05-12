@@ -187,14 +187,14 @@
         *   You can verify the image in the AWS ECR console for your repository. *(User to verify in AWS console)*
 
 4.  **Kubernetes Deployment (Targeting Local K8s on EC2):** This step focuses on deploying the containerized API to the local Kubernetes cluster (Minikube/Kind) running on the EC2 instance. This involves creating Kubernetes manifest files for a Deployment and a Service.
-    * [ ] **Ensure `kubectl` on EC2 is configured to talk to the local Minikube/Kind cluster:**
-        *   **Verify Current Context:** Run `kubectl config current-context` on the EC2 instance. It should show the context for your Minikube or Kind cluster (e.g., `minikube` or `kind-kind`).
-        *   **Check Cluster Info:** Run `kubectl cluster-info` to confirm connectivity to the local cluster master.
-        *   **(If needed) Set Context:** If `kubectl` is not pointing to the correct local cluster, use `kubectl config use-context <your-local-cluster-context-name>`.
-    * [ ] **Create/Modify Kubernetes Manifests (`/k8s/deployment.yaml`):**
-        *   **Create `k8s` directory:** If it doesn't exist, create a `k8s` directory in your project root (`mkdir k8s`).
-        *   **Create `deployment.yaml`:** Inside the `k8s` directory, create a file named `deployment.yaml`. This file will contain definitions for both the Deployment and the Service.
-        *   **Define `Deployment`:**
+    * [x] **Ensure `kubectl` on EC2 is configured to talk to the local Minikube/Kind cluster:**
+        *   [x] **Verify Current Context:** Run `kubectl config current-context` on the EC2 instance. It should show the context for your Minikube or Kind cluster (e.g., `minikube` or `kind-kind`).
+        *   [x] **Check Cluster Info:** Run `kubectl cluster-info` to confirm connectivity to the local cluster master.
+        *   [x] **(If needed) Set Context:** If `kubectl` is not pointing to the correct local cluster, use `kubectl config use-context <your-local-cluster-context-name>`.
+    * [x] **Create/Modify Kubernetes Manifests (`/k8s/deployment.yaml`):**
+        *   [x] **Create `k8s` directory:** If it doesn't exist, create a `k8s` directory in your project root (`mkdir k8s`).
+        *   [x] **Create `deployment.yaml`:** Inside the `k8s` directory, create a file named `deployment.yaml`. This file will contain definitions for both the Deployment and the Service.
+        *   [x] **Define `Deployment`:**
             *   `apiVersion: apps/v1`
             *   `kind: Deployment`
             *   `metadata:`
@@ -241,23 +241,23 @@
                     *   `targetPort: 8000` (the port on the pods that the service will forward traffic to)
                 *   `type: NodePort` (Exposes the service on each Node's IP at a static port (the `NodePort`). Makes the service accessible from outside the cluster using `<NodeIP>:<NodePort>`.)
                     *   Alternatively, for Minikube, `type: LoadBalancer` might work if a load balancer addon like MetalLB is enabled (`minikube tunnel` can also expose LoadBalancer services).
-        *   **Permissions/Networking Notes for Local K8s on EC2:**
+        *   [x] **Permissions/Networking Notes for Local K8s on EC2:**
             *   **MLflow Access:** The primary challenge is how pods in the local K8s cluster (Minikube/Kind) access the MLflow service running via Docker Compose on the same EC2 host.
                 *   **Option 1 (EC2 Private IP):** If MLflow port (5000) is exposed on the EC2 instance's network interface (0.0.0.0:5000), pods might be able to reach it via the EC2's private IP address. This requires the EC2 security group to allow traffic on port 5000 from the EC2 instance itself (or its internal Docker/K8s network ranges).
                 *   **Option 2 (Host IP via Minikube/Kind):** Minikube/Kind might provide a way to access the host's network (e.g., `host.minikube.internal` for Minikube). This needs to be verified for the specific local K8s setup.
                 *   **Option 3 (Shared Docker Network - Advanced):** If Kind/Minikube can be configured to use the same Docker network as the Docker Compose services, direct service name resolution (e.g., `http://mlflow:5000`) might work. This is less straightforward.
             *   **S3 Access:** If the EC2 instance has an IAM role with S3 permissions, pods running on that instance within Minikube/Kind *might* inherit these permissions if the local K8s setup allows it (often the case with Docker-based drivers). No explicit K8s secret for AWS credentials might be needed for S3 in this specific local setup, but this should be tested.
-    * [ ] **Apply Manifests:**
-        *   **Navigate to Manifests Directory:** `cd /home/ubuntu/health-predict/k8s` (or wherever `deployment.yaml` is).
-        *   **Run `kubectl apply`:** `kubectl apply -f deployment.yaml` on the EC2 instance.
-        *   **Verification:** Look for output like `deployment.apps/health-predict-api-deployment created` and `service/health-predict-api-service created`.
-    * [ ] **Verify Deployment:**
-        *   **Check Pods:** `kubectl get pods -l app=health-predict-api`. Wait for pods to be in `Running` state. Check logs of a pod if there are issues: `kubectl logs <pod-name> -c health-predict-api-container`.
-        *   **Check Deployment Status:** `kubectl rollout status deployment/health-predict-api-deployment`. It should report successful rollout.
-        *   **Check Service:** `kubectl get svc health-predict-api-service`.
+    * [x] **Apply Manifests:**
+        *   [x] **Navigate to Manifests Directory:** `cd /home/ubuntu/health-predict/k8s` (or wherever `deployment.yaml` is).
+        *   [x] **Run `kubectl apply`:** `kubectl apply -f deployment.yaml` on the EC2 instance.
+        *   [x] **Verification:** Look for output like `deployment.apps/health-predict-api-deployment created` and `service/health-predict-api-service created`.
+    * [x] **Verify Deployment:**
+        *   [x] **Check Pods:** `kubectl get pods -l app=health-predict-api`. Wait for pods to be in `Running` state. Check logs of a pod if there are issues: `kubectl logs <pod-name> -c health-predict-api-container`.
+        *   [x] **Check Deployment Status:** `kubectl rollout status deployment/health-predict-api-deployment`. It should report successful rollout.
+        *   [x] **Check Service:** `kubectl get svc health-predict-api-service`.
             *   Note the `TYPE` (should be `NodePort`).
             *   Note the `PORT(S)`. It will show something like `80:<NodePort>/TCP`. The `<NodePort>` is a high-numbered port (e.g., 30000-32767) assigned by Kubernetes.
-        *   **Determine Access Point:** To access the service from the EC2 instance itself (or externally if EC2 security group allows the NodePort), you'll use the EC2 instance's IP address and the assigned `NodePort`.
+        *   [x] **Determine Access Point:** To access the service from the EC2 instance itself (or externally if EC2 security group allows the NodePort), you'll use the EC2 instance's IP address and the assigned `NodePort`.
             *   Minikube users can also try `minikube service health-predict-api-service --url` to get an accessible URL, which might use a tunnel.
 
 5.  **API Testing (Automated & Manual):** This step ensures the deployed API is functioning correctly through a combination of automated tests and targeted manual verification. The primary focus is on written, repeatable tests.
