@@ -279,8 +279,8 @@
             *   Assert that the HTTP status code is 200.
             *   Assert that the response body (JSON) contains `{"status": "ok"}`.
             *   Optionally, assert that the message indicates the model is loaded (this might require the API to be fully up and model loaded before tests run, or have a separate test for post-model-load state).
-    * [ ] **Write Automated Tests for `/predict` Endpoint (`tests/api/test_api_endpoints.py`):**
-        *   Define multiple test functions for the `/predict` endpoint to cover different scenarios:
+    * [x] **Write Automated Tests for `/predict` Endpoint (`tests/api/test_api_endpoints.py`):**
+        *   [x] Define multiple test functions for the `/predict` endpoint to cover different scenarios:
             *   **Valid Input Test (e.g., `test_predict_valid_input`):**
                 *   Prepare a valid sample JSON payload (similar to the one used for manual `curl` testing, but defined within the test function or loaded from a test data file).
                 *   Send a POST request to `/predict` with the valid payload.
@@ -348,40 +348,4 @@
     * [ ] Define schedule/logic to iterate through S3 batches.
     * [ ] Get current production model URI from MLflow.
     * [ ] **Loop:**
-        * Run `monitor_drift.py`.
-        * Use `BranchPythonOperator` based on drift status.
-        * If drift, trigger `training_pipeline_dag` using `TriggerDagRunOperator`.
-        * Update model reference for next loop iteration (promote in MLflow). Optionally trigger `deployment_pipeline_dag`.
-    * [ ] Upload DAG to Airflow.
-
-3.  **Visualization Script:** (No changes needed here)
-    * [ ] Create script (`/scripts/visualize_drift.py`) to read metrics from S3 and generate plots using Matplotlib/Seaborn.
-
-4.  **Testing:**
-    * [ ] Trigger monitoring DAG. Verify S3 outputs, logging, and conditional triggering of training/deployment DAGs. Run visualization script.
-
-**Phase 6: Documentation, Finalization & AWS Showcase (Weeks 12-13)**
-
-1.  **Code Documentation:** (No changes needed here)
-    * [ ] Add docstrings and comments.
-
-2.  **README.md:**
-    * [ ] Write Overview/Goals for "Health Predict".
-    * [ ] **Update System Architecture Diagram:** Show EC2 hosting Airflow, MLflow, Postgres, Minikube/Kind. Show S3 and ECR.
-    * [ ] **Update AWS Setup Section:** Detail IaC for EC2/S3/ECR/VPC/IAM.
-    * [ ] **Add MLOps Tools Setup on EC2:** Explain `docker-compose.yml` for Airflow/MLflow/Postgres. Explain Minikube/Kind installation and startup.
-    * [ ] Update Data Setup & Drift Simulation Section. Embed plots.
-    * [ ] **Update How to Run Section:** Instructions for triggering DAGs. How to interact with the API via EC2 IP/NodePort.
-    * [ ] **Emphasize How to Teardown Section:** Clear instructions for `terraform destroy` and **stopping the EC2 instance** to save costs.
-    * [ ] List Project Structure.
-
-3.  **IaC Code Finalization:** (No changes needed here)
-    * [ ] Ensure Terraform/CDK code is clean and commented.
-
-4.  **Video Walkthrough (Recommended):**
-    * [ ] Record video demonstrating: IaC apply, tool setup on EC2 (Docker Compose, Minikube/Kind start), pipeline execution, API test (via SSH/curl), drift simulation, plots, **and crucial `terraform destroy`/EC2 stop**.
-
-5.  **Final Review & Submission:**
-    * [ ] Review all deliverables against requirements.
-    * [ ] Clean repository. Commit and push.
-    * [ ] Prepare submission package.
+        * Run `
