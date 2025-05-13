@@ -4,7 +4,8 @@ import os
 import copy # For deep copying payloads
 
 # Define the base URL for the API running in Minikube
-API_BASE_URL = "http://192.168.49.2:30887" # Replace with the actual URL from `minikube service ... --url`
+# Use the Minikube IP address directly
+API_BASE_URL = "http://192.168.49.2:30887" # Minikube IP with NodePort
 HEALTH_URL = f"{API_BASE_URL}/health"
 PREDICT_URL = f"{API_BASE_URL}/predict"
 
@@ -20,10 +21,9 @@ def test_health_check():
         assert response.status_code == 200
         response_json = response.json()
         assert response_json.get("status") == "ok"
-        # assert response_json.get("model_status") == "loaded" # Comment out for now as model isn't loading
-        # Check that the message indicates model isn't loaded (adjust if API message changes)
+        # Check that the message indicates model is loaded
         assert "model is loaded" in response_json.get("message", "").lower()
-        print(f"Health check passed (model loading check adapted): {response_json}")
+        print(f"Health check passed: {response_json}")
     except requests.exceptions.RequestException as e:
         pytest.fail(f"Request to {HEALTH_URL} failed: {e}")
     except Exception as e:
@@ -103,11 +103,11 @@ def test_predict_valid_input():
 def test_predict_missing_field():
     """Tests the /predict endpoint with a payload missing a required field."""
     payload = copy.deepcopy(SAMPLE_VALID_PAYLOAD)
-    # Assuming 'time_in_hospital' is a required field. Adjust if necessary.
-    if "time_in_hospital" in payload:
-        del payload["time_in_hospital"]
+    # Assuming 'time-in-hospital' is a required field. Adjust if necessary.
+    if "time-in-hospital" in payload:
+        del payload["time-in-hospital"]
     else:
-        pytest.skip("Skipping missing field test: 'time_in_hospital' not in sample payload for deletion.")
+        pytest.skip("Skipping missing field test: 'time-in-hospital' not in sample payload for deletion.")
 
     try:
         response = requests.post(PREDICT_URL, json=payload, timeout=10)
@@ -126,8 +126,8 @@ def test_predict_missing_field():
 def test_predict_invalid_data_type():
     """Tests the /predict endpoint with a payload having an incorrect data type for a field."""
     payload = copy.deepcopy(SAMPLE_VALID_PAYLOAD)
-    # Assuming 'time_in_hospital' should be an int. Send as string.
-    payload["time_in_hospital"] = "five_days" # Invalid type
+    # Assuming 'time-in-hospital' should be an int. Send as string.
+    payload["time-in-hospital"] = "five_days" # Invalid type
 
     try:
         response = requests.post(PREDICT_URL, json=payload, timeout=10)

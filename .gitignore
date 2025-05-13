@@ -177,4 +177,4 @@ mlops-services/logs/
 # ML / Training Artifacts
 ray_results_hpo/
 ray_results_airflow_hpo/
-*.joblib 
+*.joblib /mlruns/

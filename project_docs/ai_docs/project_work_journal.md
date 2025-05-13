@@ -290,3 +290,50 @@
         - Modified `src/api/main.py` `/predict` endpoint to apply the loaded preprocessor's `.transform()` method to the engineered data before passing it to the model.
 - **Optimization:** Reduced the default number of HPO trials (`--ray-num-samples`) in `scripts/train_model.py` from 10 to 2 to accelerate DAG runs during this debugging phase.
 - **Next Step:** Re-run the training DAG to log the preprocessor artifact correctly, then rebuild/redeploy the API and run tests.
+
+## 2025-05-13: Verified Preprocessor Logging & Diagnosed MLflow CLI URI Issue
+
+- **Goal**: Verify that the changes to `scripts/train_model.py` correctly log the `preprocessor.joblib` with each "Best Model" run, and ensure the full pipeline to production works.
+- **Actions & Observations**:\n    - Triggered the `health_predict_training_hpo` DAG (run `manual__2025-05-13T14:41:11+00:00`).\n    - Confirmed the `run_training_and_hpo` task completed successfully.\n    - Verified from its logs that `preprocessor.joblib` was logged as an artifact to the MLflow run associated with each of the three "Best\_<ModelName>\_Model" (LogisticRegression, RandomForest, XGBoost) trials within this DAG run.\n        - E.g., `Logged preprocessor artifact (preprocessor_files/preprocessor.joblib) to Best_RandomForest_Model run feee84cd357e48e99713e928186d1b2a.`\n    - Confirmed the `find_and_register_best_model` task also completed successfully.\n    - This task promoted `HealthPredict_RandomForest` version 17 to "Production".\n    - The MLflow Run ID for this newly promoted Production model is `33e29674486942f6a7c80e2a8322e05b`.\n    - Encountered an issue where `mlflow artifacts list --run-id 33e296...` (and `mlflow runs list`) in the `jupyterlab` container initially failed to find the run or returned empty lists.\n        - **Diagnosis**: The `MLFLOW_TRACKING_URI` environment variable was not set in the `jupyterlab` container, causing the `mlflow` CLI to default to local file storage (`mlruns/`) instead of querying the central MLflow server (`http://mlflow:5000`).\n        - **Resolution**: Explicitly setting `export MLFLOW_TRACKING_URI=http://mlflow:5000` within the `docker-compose exec -T jupyterlab bash -c '...'` command allowed the CLI to connect to the server and list runs/artifacts correctly.\n    - Verified artifacts for the Production run `33e29674486942f6a7c80e2a8322e05b`:\n        - It contains the `model/` directory.\n        - It **does not** contain the `preprocessor/preprocessor.joblib` artifact.\n- **Conclusion**:\n    - The script `scripts/train_model.py` now correctly logs the preprocessor with its associated "Best Model" run.\n    - The current Production model (run `33e296...` from `2025-05-13 02:18:58 UTC`) was an older run, selected by `find_and_register_best_model` due to a higher F1 score from a previous, more extensive HPO. It was created *before* the preprocessor co-location logic was added.\n    - Therefore, the *current* Production model in the registry does not have its preprocessor packaged directly with it in the same MLflow run. Future models promoted from DAG runs using the updated script *will* have this.\n- **Next Steps**: Discuss with the user how to address the fact that the current Production model lacks a co-located preprocessor (e.g., re-run training, modify promotion criteria).
+
+## 2025-05-13: Ensured MLflow URI for JupyterLab & Preprocessor Check for Model Promotion
+
+- **Goal**: Ensure `MLFLOW_TRACKING_URI` is correctly set for the `jupyterlab` service and that the model promotion logic in the Airflow DAG only promotes models if they have their `preprocessor.joblib` artifact co-located.
+- **Actions & Observations**:
+    - **`jupyterlab` MLflow URI**: 
+        - Modified `mlops-services/docker-compose.yml` to explicitly set the `MLFLOW_TRACKING_URI=http://mlflow:5000` environment variable for the `jupyterlab` service. This ensures that `mlflow` CLI commands executed from within this container (e.g., for ad-hoc checks) correctly target the central MLflow server.
+        - Resolved Docker Compose networking issues that arose from previous edits, ensuring all services are on a consistently defined `mlops_network` and that the `jupyterlab` service uses a pre-built image (`jupyter/scipy-notebook:latest`) to avoid build errors due to a missing `Dockerfile.jupyterlab`.
+    - **Preprocessor Check in DAG**:
+        - Modified the `find_and_register_best_model` Python function within `mlops-services/dags/training_pipeline_dag.py`.
+        - The function now includes a step to list artifacts for the candidate best model run and specifically checks for the existence of `preprocessor/preprocessor.joblib`.
+        - Model registration and promotion to "Production" only proceed if this preprocessor artifact is found.
+    - **Verification Run**:
+        - Triggered the `health_predict_training_hpo` DAG (run `manual__2025-05-13T15:11:00+00:00`).
+        - The `run_training_and_hpo` task completed successfully, and its logs confirmed that `preprocessor.joblib` was logged with each of the "Best\_<ModelName>\_Model" runs (e.g., `Logged preprocessor artifact (preprocessor_files/preprocessor.joblib) to Best_RandomForest_Model run 04df414476cb4dccbf8eee97f26e7cf4.`).
+        - The `find_and_register_best_model` task also completed successfully.
+        - Its logs confirmed that it identified a RandomForest model (run `04df414476cb4dccbf8eee97f26e7cf4`, F1 `0.6209`) and explicitly found the `preprocessor/preprocessor.joblib` artifact for this run.
+        - Subsequently, this model (`HealthPredict_RandomForest` version 1) was registered and promoted to "Production".
+- **Conclusion**:
+    - The `MLFLOW_TRACKING_URI` is now correctly configured for the `jupyterlab` service.
+    - The Airflow DAG now correctly ensures that only models with a co-located preprocessor artifact are promoted to Production.
+    - The latest DAG run successfully promoted a new RandomForest model that meets this criterion.
+- **Next Steps**: Proceed with further project tasks as outlined in `project_steps.md`.
+
+## 2025-05-13: Fixed API Column Name Mismatch Issues & Completed API Testing
+
+- **Goal**: Fix the API test failures and ensure the API can correctly handle prediction requests.
+- **Issues Identified**:
+    1. **Network Connectivity**: The API pods couldn't reach the MLflow server using `host.minikube.internal:5000`. Fixed by updating the environment variable to use the EC2 private IP (`10.0.1.99:5000`).
+    2. **MLflow Stage vs. Alias**: The API was looking for a model alias named "Production" but the MLflow model was registered with a stage named "Production". Fixed by modifying the `startup_event` function to use `get_latest_versions` with stage filtering instead of `get_model_version_by_alias`.
+    3. **Column Name Mismatch**: The preprocessor expected column names with hyphens (e.g., `glyburide-metformin`) while the API was using underscores (e.g., `glyburide_metformin`). This mismatch caused the preprocessor to fail with a `KeyError` when trying to transform the input data.
+- **Solution Implemented**:
+    - Modified `src/api/main.py` to dynamically identify medication columns with hyphens in the preprocessor's expected columns.
+    - Added logic to create additional columns with hyphenated names in the DataFrame before applying the preprocessor, ensuring both formats are available.
+    - Ensured the API's Pydantic model can accept hyphenated field names in JSON but convert them to underscore format for internal processing.
+- **Results**:
+    - All API tests now pass successfully.
+    - The API can correctly process prediction requests with hyphenated field names in the JSON payload.
+    - The API returns appropriate prediction results with both a binary prediction and probability score.
+- **Next Steps**:
+    - Consider refactoring the preprocessor to consistently use either hyphenated or underscore column names to avoid this type of mismatch in the future.
+    - Add more comprehensive API tests for edge cases and error handling.

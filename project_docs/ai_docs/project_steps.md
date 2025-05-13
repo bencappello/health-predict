@@ -318,6 +318,23 @@
         *   *Current Status:* Automated tests are failing due to preprocessing issues in the API. The training script (`train_model.py`) and API code (`main.py`) have been modified to correctly log, load, and apply the preprocessor artifact. The next step is to re-run the training DAG to ensure the artifact is logged, then rebuild/deploy/test the API.
     * [ ] **Step 5: Git Commit & Push - Target: Save the working API deployment state.
 
+### V1: Fix `train_model.py` MLFlow HPO child runs & final model preprocessor logging
+- Status: Mostly Complete
+- Details:
+  - [X] HPO trials (`train_model_hpo`) correctly create nested MLflow runs.
+  - [X] The main `train_model.py` script correctly identifies the best HPO trial for each model type.
+  - [X] The script trains a final model of each type using the best HPO parameters.
+  - [X] The script logs this final model to a new, non-nested MLflow run (e.g., "Best_RandomForest_Model").
+  - [X] The `preprocessor.joblib` (the one fitted on the full training data before HPO) is correctly logged as an artifact to the MLflow run associated with *each* "Best\_<ModelName>\_Model" (verified for runs created by the updated script).
+  - [X] ~~Ensure the `preprocessor.joblib` is logged as an artifact *with the final chosen model's MLflow run* (the one that gets registered and promoted).~~
+    - **Note / Issue**: The script changes achieve this for *newly trained and selected* models. However, the *currently registered Production model* (RandomForest v17, run `33e29674486942f6a7c80e2a8322e05b` from an older DAG run) was promoted by `find_and_register_best_model` due to its F1 score, but it *does not* have the preprocessor co-located as it predates this script change. **UPDATE:** This is now resolved. The `find_and_register_best_model` function now checks for the preprocessor artifact, and a new RandomForest model (v1, run `04df414476cb4dccbf8eee97f26e7cf4`) with its co-located preprocessor has been successfully promoted to Production.
+- Next Steps: **ALL COMPLETE FOR V1**
+  - ~~Decide how to handle the current Production model lacking its co-located preprocessor:~~
+    - ~~Option 1: Re-run training pipeline (possibly with more HPO trials) until a new model (with co-located preprocessor) is selected for Production.~~ (DONE - New model promoted)
+    - ~~Option 2: Modify `find_and_register_best_model` to *only* promote models that have the `preprocessor/preprocessor.joblib` artifact.~~ (DONE - Logic updated in DAG)
+    - ~~Option 3: Accept current state for V1 and address in V2.~~
+  - [X] Ensure `MLFLOW_TRACKING_URI` is consistently available/set in the `jupyterlab` container environment for reliable `mlflow` CLI usage (e.g., by setting it in its Dockerfile or as an environment variable in `docker-compose.yml`). (DONE - Added to `docker-compose.yml`)
+
 **Phase 4: CI/CD Automation using AWS Resources (Weeks 7-8)**
 
 1.  **Airflow DAG for Deployment:**

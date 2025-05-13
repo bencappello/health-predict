@@ -1,5 +1,9 @@
 version: '3.8'
 
+networks:
+  mlops_network:
+    driver: bridge
+
 services:
   postgres:
     image: postgres:13
@@ -13,6 +17,8 @@ services:
       - ./postgres-init:/docker-entrypoint-initdb.d
     ports:
       - "5432:5432"
+    networks:
+      - mlops_network
 
   airflow-init:
     build:
@@ -33,6 +39,8 @@ services:
       # - ./config:/opt/airflow/config # If you have custom airflow.cfg
     entrypoint: /bin/bash
     command: -c "airflow db init && airflow users create --username admin --password admin --firstname Anonymous --lastname User --role Admin --email admin@example.com"
+    networks:
+      - mlops_network
 
   airflow-webserver:
     build:
@@ -56,6 +64,8 @@ services:
       - AIRFLOW__WEBSERVER__WORKERS=2
       - PYTHONPATH=/home/jovyan/work
     command: airflow webserver
+    networks:
+      - mlops_network
 
   airflow-scheduler:
     build:
@@ -76,6 +86,8 @@ services:
       - AIRFLOW__CORE__EXECUTOR=LocalExecutor
       - PYTHONPATH=/home/jovyan/work
     command: airflow scheduler
+    networks:
+      - mlops_network
 
   mlflow:
     build:
@@ -93,30 +105,35 @@ services:
       --port 5000
       --backend-store-uri postgresql+psycopg2://airflow:airflow@postgres:5432/mlflowdb
       --default-artifact-root s3://health-predict-mlops-f9ac6509/mlflow-artifacts/
+    networks:
+      - mlops_network
 
   jupyterlab:
-    image: jupyter/scipy-notebook:latest # Includes pandas, sklearn, matplotlib, seaborn etc.
-    user: root # Run as root to install packages and ensure permissions
+    # image: jupyter/scipy-notebook:latest  # Reverted to pre-built image
+    build:
+      context: ../
+      dockerfile: mlops-services/Dockerfile.jupyterlab
+    container_name: jupyterlab
     ports:
       - "8888:8888"
     volumes:
-      - "../:/home/jovyan/work" # Mount the entire project root
+      - ../:/home/jovyan/work # Mount the whole project
     environment:
       - JUPYTER_ENABLE_LAB=yes
-      - GRANT_SUDO=yes # Allows sudo in container if needed, useful with user:root
-      # - NOTEBOOK_ARGS="--NotebookApp.token='' --NotebookApp.password=''" # Alternative: Disable token/password - use with caution
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+      # Add any other necessary env vars like GRANT_SUDO=yes if needed for package installs within notebook
     working_dir: /home/jovyan/work # Start in the project directory
-    command: >
-      bash -c "pip install --upgrade pip && \
-               pip install --no-cache-dir -r /home/jovyan/work/scripts/requirements-training.txt && \
-               start-notebook.sh --NotebookApp.token='' --NotebookApp.password='' --NotebookApp.ip='0.0.0.0'"
-      # Installs dependencies from requirements-training.txt and starts lab
+    command: start-notebook.sh --NotebookApp.token='' --NotebookApp.password='' --NotebookApp.ip='0.0.0.0' # Example command
     networks:
-      - default # Connect to the same network as other services
+      - mlops_network
+    depends_on:
+      - mlflow
+      - postgres
 
 volumes:
   pgdata:
 
-networks:
-  default:
-    name: mlops_network 
+# Removed the old networks alias
+# networks:
+#  default:
+#    name: mlops_network 
