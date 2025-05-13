@@ -2,6 +2,7 @@ from airflow import DAG
 from airflow.operators.bash import BashOperator
 from airflow.operators.python import PythonOperator
 from datetime import datetime, timedelta
+from airflow.utils.dates import days_ago
 import mlflow
 import os
 
@@ -21,7 +22,7 @@ dag = DAG(
     default_args=default_args,
     description='Build and deploy the Health Predict API to Kubernetes',
     schedule_interval=None,  # Set to None for manual triggering
-    start_date=datetime(2025, 5, 14),
+    start_date=days_ago(1),  # Changed from future date to days_ago(1)
     catchup=False,
     tags=['health-predict', 'deployment', 'k8s'],
 )
@@ -141,7 +142,7 @@ build_api_docker_image = BashOperator(
     task_id='build_api_docker_image',
     bash_command="""
     cd /home/ubuntu/health-predict && \
-    docker build -t {{ ti.xcom_pull(task_ids="define_image_details")["full_image_uri"] }} .
+    docker build -t {{ ti.xcom_pull(task_ids="define_image_details", key="full_image_uri") }} .
     """,
     dag=dag,
 )
@@ -150,7 +151,7 @@ build_api_docker_image = BashOperator(
 push_image_to_ecr = BashOperator(
     task_id='push_image_to_ecr',
     bash_command="""
-    docker push {{ ti.xcom_pull(task_ids="define_image_details")["full_image_uri"] }}
+    docker push {{ ti.xcom_pull(task_ids="define_image_details", key="full_image_uri") }}
     """,
     dag=dag,
 )
@@ -160,7 +161,7 @@ update_kubernetes_deployment = BashOperator(
     task_id='update_kubernetes_deployment',
     bash_command=f"""
     kubectl set image deployment/{env_vars['K8S_DEPLOYMENT_NAME']} \
-      {env_vars['K8S_CONTAINER_NAME']}={{ ti.xcom_pull(task_ids="define_image_details")["full_image_uri"] }} \
+      {env_vars['K8S_CONTAINER_NAME']}={{ ti.xcom_pull(task_ids="define_image_details", key="full_image_uri") }} \
       --record
     
     # Ensure MLFLOW_TRACKING_URI is set correctly in the deployment
