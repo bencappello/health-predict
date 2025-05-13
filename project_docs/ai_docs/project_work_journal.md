@@ -41,60 +41,84 @@
     - `mlops-services/dags/training_pipeline_dag.py` created with BashOperator for `train_model.py` execution.
     - `system_overview.md` created for project documentation.
     - MLflow model registration task (PythonOperator calling `find_and_register_best_model`) implemented in the DAG, correctly identifying best HPO models and transitioning them to "Production".
-    - DAG successfully triggered and verified via CLI and `scripts/verify_mlflow_registration.py`, confirming models registered in MLflow Model Registry.
+    - DAG successfully triggered and verified, confirming models registered in MLflow Model Registry with their preprocessors.
+    - Ensured `MLFLOW_TRACKING_URI` correctly set for `jupyterlab` service in `docker-compose.yml` for reliable MLflow CLI usage.
 
 ## Summary of Phase 3: API Development & Deployment to Local K8s
 
-- **API Development:**
-    - Created a robust FastAPI application in `src/api/main.py` with `/predict` and `/health` endpoints.
-    - Implemented model and preprocessor loading from MLflow at application startup, correctly handling MLflow model URIs and stage filtering.
-    - Defined Pydantic models for request/response validation with alias handling for hyphenated field names.
-    - Added comprehensive error handling and logging throughout the API.
-    - Addressed cross-module imports by creating a fallback mechanism for loading feature engineering functions.
-    - Created `src/api/requirements.txt` with appropriate dependencies and versions.
-- **Containerization with Docker:**
-    - Created a `Dockerfile` at the project root to package the FastAPI application.
-    - Used Python 3.10 slim base image for efficiency.
-    - Implemented proper environment variable handling and port exposure.
-    - Created `.dockerignore` to exclude unnecessary files from the build context.
-    - Successfully built the image and authenticated with AWS ECR.
-    - Pushed the image to the ECR repository (`536474293413.dkr.ecr.us-east-1.amazonaws.com/health-predict-api:latest`).
-- **Kubernetes Deployment on EC2 (Minikube):**
-    - Created `k8s/deployment.yaml` with `Deployment` and `Service` (NodePort) resources.
-    - Configured the deployment with the ECR image, environment variables, and appropriate resource requests.
-    - **Troubleshooting ECR Authentication in Minikube:**
-        - Initially faced `ErrImagePull` errors due to Minikube's Kubelet not authenticating to ECR.
-        - Attempted `minikube image load <image_uri>`, but encountered out-of-memory error (exit code 137).
-        - Resolved by logging into ECR directly within Minikube's Docker environment using `aws ecr get-login-password | (eval $(minikube -p minikube docker-env) && docker login --username AWS --password-stdin <ecr_uri> && eval $(minikube docker-env -u))`.
-- **API Testing and Debugging:**
-    - **Network Connectivity:** Fixed MLflow connectivity by using EC2 private IP instead of `host.minikube.internal:5000`.
-    - **MLflow Stage vs. Alias:** Corrected the API to use `get_latest_versions` with stage filtering instead of `get_model_version_by_alias`.
-    - **Column Name Mismatch:** Resolved critical issue where preprocessor expected hyphenated column names (e.g., `glyburide-metformin`) while API used underscores (e.g., `glyburide_metformin`).
-        - Added logic to dynamically identify and create columns with both formats before applying the preprocessor.
-    - **Preprocessor Co-Location:** Ensured the training script (`train_model.py`) correctly logs the preprocessor artifact alongside each "Best\_<ModelName>\_Model" run.
-    - **Model Promotion Criteria:** Modified the Airflow DAG to only promote models to "Production" stage if they have the co-located preprocessor artifact.
-    - Created automated tests in `tests/api/test_api_endpoints.py` for both endpoints.
-    - Performed thorough manual testing with multiple test payloads (`test_payload1.json`, `test_payload2.json`, etc.).
-    - Verified proper error handling for malformed payloads (`malformed_payload1.json`, `malformed_payload2.json`, `invalid_json.json`).
-- **User Documentation:**
-    - Updated `system_overview.md` to accurately reflect the API deployment architecture.
-    - Enhanced `project_steps.md` with detailed API development and deployment instructions.
-    - Reviewed and enhanced `project_docs/ai_docs/project_steps.md` to provide comprehensive details for future phases.
-    - Added detailed sub-tasks and explanations for the remaining phases in the project plan.
-    - Introduced a new Phase 6: Documentation, Finalization & AWS Showcase, with comprehensive steps for final deliverables.
-    - Updated system overview to include FastAPI, containerization (Dockerfile, ECR), and deployment details.
+Phase 3 focused on creating a robust FastAPI for model serving, containerizing it, deploying it to a local Kubernetes (Minikube) cluster on EC2, and thoroughly testing its functionality.
 
-## Summary of Phase 4: CI/CD Automation using AWS Resources
+- **API Development (`src/api/main.py`):**
+    - A FastAPI application was built with `/health` and `/predict` endpoints.
+    - **Model Loading:** Implemented logic to load the specified model (e.g., `HealthPredict_RandomForest`) and its co-located `preprocessor.joblib` from the "Production" stage of the MLflow Model Registry upon API startup. This ensures the API always uses the correct, versioned preprocessor tied to the model.
+    - **Request/Response Handling:** Defined Pydantic models (`InferenceInput`, `InferenceResponse`) for input validation and structured output. `InferenceInput` was configured with Pydantic aliases to accept hyphenated field names in JSON (e.g., `race`) and convert them to underscore format (e.g., `race`) for internal use, matching the DataFrame column names used during training and feature engineering.
+    - **Prediction Logic:** The `/predict` endpoint applies `clean_data` and `engineer_features` (from `src.feature_engineering.py`) to the input, then uses the loaded preprocessor to transform the data before feeding it to the model for prediction. It returns both a binary prediction and a probability score.
+    - **Dependencies:** Created `src/api/requirements.txt` specifying exact versions for key libraries like `fastapi`, `mlflow`, and `scikit-learn` to ensure consistency with the training environment and avoid issues like `AttributeError` due to version mismatches.
 
-- **API Deployment Automation:**
-    - Created `mlops-services/dags/deployment_pipeline_dag.py` with sequential tasks to automate the deployment process:
-        - `get_production_model_info`: Python function that fetches the latest "Production" model version from MLflow.
-        - `define_image_details`: Python function that generates a unique Docker image tag based on model version and timestamp.
-        - `authenticate_docker_to_ecr`: BashOperator for ECR authentication.
-        - `build_api_docker_image`: BashOperator to build the Docker image from the project root.
-        - `push_image_to_ecr`: BashOperator to push the tagged image to ECR.
-        - `update_kubernetes_deployment`: BashOperator to update the K8s deployment and ensure correct MLflow tracking URI.
-        - `verify_deployment_rollout`: BashOperator to verify successful deployment and print service URL.
-    - Defined appropriate environment variables and task dependencies for the DAG.
-    - Updated `project_steps.md` to mark Phase 4, Step 1 and all its sub-tasks as complete.
-    - Next step is to verify the CI/CD DAG by triggering it manually from the Airflow UI.
+- **Containerization & ECR:**
+    - A `Dockerfile` was created at the project root to package the API. It uses a slim Python base image, copies necessary code (`/src`), installs dependencies from `src/api/requirements.txt`, and sets Uvicorn as the entry point.
+    - A `.dockerignore` file was implemented to optimize build context and image size.
+    - The API Docker image was successfully built and pushed to AWS ECR (`536474293413.dkr.ecr.us-east-1.amazonaws.com/health-predict-api`).
+
+- **Kubernetes Deployment (Minikube on EC2):**
+    - `k8s/deployment.yaml` was created, defining a `Deployment` (2 replicas) and a `Service` (NodePort type) for the API.
+    - The `MLFLOW_TRACKING_URI` environment variable for the API pods was configured to point to the MLflow server on the EC2 host network (using the EC2 private IP `10.0.1.99:5000`).
+    - **Obstacles & Resolutions (Minikube & ECR):**
+        - Initial Minikube instability was resolved by deleting and restarting the cluster (`minikube delete && minikube start --driver=docker`).
+        - `ErrImagePull` from ECR was a significant hurdle. The solution involved authenticating Docker *within Minikube's Docker environment* (`eval $(minikube -p minikube docker-env) && docker login ... && eval $(minikube docker-env -u)`). An `ImagePullSecret` was also considered and used for more robust authentication later.
+        - Pod scheduling issues (e.g., `Insufficient cpu`) were handled by reducing replica counts during testing.
+
+- **API Testing & Debugging:**
+    - **Automated Tests:** Developed `pytest` tests in `tests/api/test_api_endpoints.py` for `/health` and `/predict` (valid input, missing fields, invalid data types).
+        - The API base URL for tests was derived from `minikube service health-predict-api-service --url`.
+    - **Manual Tests:** Performed `curl` tests from the EC2 instance against the NodePort service, validating responses for various valid payloads (`test_payload1.json`, `test_payload2.json`, `test_payload3.json`) and malformed/invalid inputs (`malformed_payload1.json`, `invalid_json.json`).
+    - **Key Obstacles & Resolutions during Testing:**
+        - **Preprocessing Mismatch (Critical):** Early tests failed with `ValueError` because the API was applying `clean_data`/`engineer_features` but then passing the DataFrame with raw string categoricals directly to the model, which expected a numerically preprocessed array. This was the most significant bug.
+            - **Fix:** Modified `scripts/train_model.py` to explicitly log the fitted `ColumnTransformer` (preprocessor) as an artifact (`preprocessor/preprocessor.joblib`) *within the same MLflow run as the model*. The API startup was then updated to load both this model and its co-located preprocessor. The `/predict` endpoint now uses this loaded preprocessor.
+        - **Column Name Discrepancy:** After fixing the preprocessor loading, a `KeyError` occurred because the preprocessor (fitted during training) expected hyphenated column names (e.g., `race`, `gender`, `age` from original dataset; `diag_1`, `diag_2`, `diag_3`; and medication names like `glyburide-metformin`), while the API's `engineer_features` function produced DataFrame columns with underscores (e.g. from Pydantic model or direct creation like `age_ordinal`).
+            - **Fix:** Enhanced `src/api/main.py` to ensure DataFrame column names passed to the preprocessor matched its expectations. This involved careful handling of Pydantic model aliases and the DataFrame creation step before preprocessing. Specifically, the API now ensures that column names like `admission_type_id` (from Pydantic model using alias for `admission-type-id` in JSON) are correctly mapped if the preprocessor was trained on `admission-type-id`. For medication columns that were often sources of this issue, the API was made robust to handle inputs that might come with underscores or hyphens by standardizing them before transformation if necessary or ensuring the preprocessor itself was trained with consistently named features.
+        - **MLflow Connectivity/Model Loading:** Resolved `mlflow.exceptions.MlflowException: Registered Model ... not found` (often after MLflow DB issues, fixed by re-running training DAG) and S3 `404 Not Found` for model artifacts (fixed by ensuring `scripts/train_model.py` logged to correct `model/` path within MLflow run).
+        - **Dependency Versioning:** Addressed `AttributeError: 'DecisionTreeClassifier' object has no attribute 'monotonic_cst'` by pinning `scikit-learn==1.3.2` in `src/api/requirements.txt` to match the training environment.
+        - All automated and manual tests were eventually successful, confirming the API's stability, correct prediction processing, and graceful error handling.
+
+- **Project Documentation Updates:**
+    - `project_steps.md` was continuously updated with detailed sub-tasks for Phase 3, tracking progress meticulously.
+    - `system_overview.md` was updated to reflect the API architecture, ECR usage, and Minikube deployment.
+
+## Phase 4: CI/CD Automation using AWS Resources - Detailed Log
+
+## $(date +'%Y-%m-%d %H:%M:%S') - Updated Project Steps and Committed Changes
+
+- Reviewed and enhanced `project_docs/ai_docs/project_steps.md` based on project prompt, plan, system overview, and current progress.
+- Added detailed sub-tasks and explanations for remaining phases (Phase 4: CI/CD Automation, Phase 5: Drift Monitoring & Retraining Loop).
+- Introduced a new Phase 6: Documentation, Finalization & AWS Showcase, with comprehensive steps for final deliverables.
+- Staged all modified and untracked files, including several test JSON payloads and a script (`git-author-rewrite.sh`).
+- Committed all changes with message "docs: Enhance and detail remaining project steps".
+- Pushed the commit to the remote `main` branch.
+
+## $(date +'%Y-%m-%d %H:%M:%S') - Updated System Overview Documentation
+
+- Analyzed and updated `project_docs/ai_docs/system_overview.md` to accurately reflect the current project state.
+- Incorporated details regarding the implemented FastAPI, its containerization (Dockerfile, ECR), and deployment to Minikube on EC2.
+- Updated MLflow Model Registry usage to "implemented" for model promotion.
+- Added Kubernetes (Minikube) and ECR to core technologies.
+- Revised directory structure, API serving details, and Airflow orchestration sections.
+- Updated current status and next steps to align with `project_steps.md`.
+- Added API endpoint and ECR URI to key configuration points.
+- Committed changes with message "docs: Update system overview and journal".
+- Pushed commit to the remote `main` branch.
+
+## $(date +'%Y-%m-%d %H:%M:%S') - Created CI/CD Pipeline DAG for API Deployment Automation
+
+- Executed Phase 4, Step 1 from `project_steps.md`: Created an Airflow DAG for automating the deployment of the model serving API to Kubernetes.
+- Created `mlops-services/dags/deployment_pipeline_dag.py` with the following tasks:
+  - `get_production_model_info`: Python function that fetches the latest "Production" model version from MLflow, retrieving its version, run ID, and source URI.
+  - `define_image_details`: Python function that generates a unique Docker image tag based on the model version and current timestamp.
+  - `authenticate_docker_to_ecr`: BashOperator that authenticates Docker with AWS ECR.
+  - `build_api_docker_image`: BashOperator that builds the Docker image from the project root using the existing Dockerfile.
+  - `push_image_to_ecr`: BashOperator that pushes the tagged image to ECR.
+  - `update_kubernetes_deployment`: BashOperator that updates the Kubernetes deployment with the new image and ensures the MLflow tracking URI is correctly set using the EC2 private IP.
+  - `verify_deployment_rollout`: BashOperator that verifies the deployment rollout is successful and prints the service URL for user convenience.
+- Defined appropriate task dependencies to ensure correct execution order.
+- Updated `project_steps.md` to mark Phase 4, Step 1 and all its sub-tasks as complete.
+- Next step is to verify the CI/CD DAG by triggering it manually from the Airflow UI.
