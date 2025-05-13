@@ -104,7 +104,7 @@ This script handles the end-to-end training process for multiple model types (Lo
 *   **`health_predict_training_hpo` (Implemented):**
     *   Orchestrates `scripts/train_model.py` execution.
     *   Includes a `find_and_register_best_model` task that queries MLflow for the best model from the HPO runs, checks for a co-located `preprocessor.joblib` artifact, and if found, registers the model and promotes its version to the "Production" stage in the MLflow Model Registry.
-*   **`deployment_pipeline_dag.py` (Planned):**
+*   **`health_predict_api_deployment` (Implemented):**
     *   Automates the API deployment process:
         *   Fetches the latest "Production" model information from MLflow.
         *   Builds the API Docker image (using the root `Dockerfile`).
@@ -116,7 +116,7 @@ This script handles the end-to-end training process for multiple model types (Lo
     *   Executes `scripts/monitor_drift.py` (using Evidently AI) to detect data and concept drift against a reference dataset.
     *   Logs drift reports and metrics to MLflow.
     *   If significant drift is detected, triggers the `health_predict_training_hpo` DAG for model retraining using the new data combined with reference data.
-    *   (Optionally) Triggers the `deployment_pipeline_dag.py` if retraining leads to a new "Production" model.
+    *   (Optionally) Triggers the `health_predict_api_deployment` DAG if retraining leads to a new "Production" model.
 
 ## 9. MLOps Services Infrastructure (`mlops-services/docker-compose.yml`)
 
@@ -139,8 +139,8 @@ Services communicate over a shared Docker network.
     *   FastAPI model serving API (`src/api/main.py`) that loads model/preprocessor from MLflow.
     *   Containerization of the API (`Dockerfile`) and push to ECR.
     *   Deployment of the API to a local Kubernetes (Minikube) cluster on EC2, with successful testing.
+    *   Airflow CI/CD DAG (`health_predict_api_deployment`) for automated API deployment, successfully tested.
 *   **Immediate Next Steps (High-Level from `project_steps.md`):**
-    *   Develop and test the Airflow CI/CD DAG (`deployment_pipeline_dag.py`) for automated API deployment.
     *   Implement the drift monitoring script (`scripts/monitor_drift.py`) using Evidently AI.
     *   Develop and test the Airflow DAG (`monitoring_retraining_dag.py`) for the drift detection and automated retraining loop.
     *   Complete comprehensive project documentation, finalization, and showcase materials (Phase 6).

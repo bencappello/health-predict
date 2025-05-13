@@ -132,3 +132,26 @@ Phase 3 focused on creating a robust FastAPI for model serving, containerizing i
 - The deployment pipeline DAG (`health_predict_api_deployment`) is configured to work with these permissions, with appropriate authentication steps in place.
 - All IAM permissions necessary for the CI/CD pipeline execution have been confirmed to be correctly configured.
 - Next step is to test the CI/CD DAG by triggering it manually from the Airflow UI.
+
+## 2025-05-13 19:39:58 - Testing CI/CD DAG for Automated API Deployment
+
+- Completed Phase 4, Step 3: Testing the CI/CD DAG for automated API deployment.
+- Successfully triggered the `health_predict_api_deployment` DAG manually from the Airflow CLI using:
+  ```bash
+  docker-compose exec airflow-webserver airflow dags trigger health_predict_api_deployment
+  ```
+- Confirmed the DAG ran to completion successfully, as verified by:
+  ```bash
+  docker-compose exec airflow-webserver airflow dags list-runs -d health_predict_api_deployment
+  ```
+- Verified that the Docker image was built correctly by checking local Docker images. Multiple versions of the `health-predict-api` image were present in the local Docker environment.
+- Confirmed that the Kubernetes deployment was successfully updated:
+  - Checked running pods: `kubectl get pods -l app=health-predict-api`
+  - Examined deployment details: `kubectl describe deployment health-predict-api-deployment`
+  - Verified the deployment is using the expected image: `536474293413.dkr.ecr.us-east-1.amazonaws.com/health-predict-api:latest`
+- Successfully tested the API endpoints:
+  - Obtained the service URL using: `minikube service health-predict-api-service --url`
+  - Tested the `/health` endpoint, which returned a successful response: `{"status":"ok","message":"API is healthy and model is loaded."}`
+  - Tested the `/predict` endpoint using a test payload, which successfully returned a prediction.
+- Updated `project_steps.md` to mark all sub-tasks in Phase 4, Step 3 as completed.
+- Next phase to begin: Phase 5 - Drift Monitoring & Retraining Loop on AWS.
