@@ -5,20 +5,19 @@ WORKDIR /app
 ENV PYTHONUNBUFFERED=1
 # ENV MLFLOW_TRACKING_URI (Set at runtime by Kubernetes is preferred)
 
-# Copy requirements first to leverage Docker cache
-COPY src/api/requirements.txt .
-
+# Copy requirements to /app first (one level up from WORKDIR)
+COPY src/api/requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
-# Explicitly install boto3 in a separate step for debugging
-RUN pip install --no-cache-dir boto3==1.28.57
-
-# Copy the entire src directory into the /app/src directory in the image
+# Copy the entire src directory content into the WORKDIR (/app/src)
 COPY src ./src
 
 EXPOSE 8000
 
-# Command to run the FastAPI application using Uvicorn
-# This assumes main.py is in /app/src/api/main.py
-CMD ["uvicorn", "src.api.main:app", "--host", "0.0.0.0", "--port", "8000"] 
+# Command for development with live reload (relative to WORKDIR /app/src):
+CMD ["uvicorn", "src.api.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload", "--reload-dir", "/app/src/api"]
+
+# Commented out old commands
+# CMD ["python", "./src/api/main.py"]
+# CMD ["uvicorn", "src.api.main:app", "--host", "0.0.0.0", "--port", "8000"] 

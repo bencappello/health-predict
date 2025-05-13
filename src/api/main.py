@@ -5,8 +5,11 @@ from typing import Optional
 import mlflow
 import numpy as np
 import pandas as pd
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+import joblib
 
 # Attempt to import feature engineering functions
 try:
@@ -34,6 +37,19 @@ logger = logging.getLogger(__name__)
 # Initialize FastAPI app
 app = FastAPI(title="Health Predict API", version="0.1.0")
 
+# Add custom exception handler for validation errors
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    # Log the detailed validation errors
+    # logger.error(f"Validation error for request {request.url}: {exc.errors()}")
+    print(f"!!! VALIDATION ERROR HANDLER TRIGGERED for {request.url} !!!") # Simple print
+    print(f"Validation Errors: {exc.errors()}") # Simple print
+    # Return the default 422 response body from FastAPI
+    return JSONResponse(
+        status_code=422,
+        content={"detail": exc.errors()},
+    )
+
 # MLflow Configuration (Ideally, use environment variables)
 MLFLOW_TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI", "http://mlflow:5000")
 # Specific model name and stage will be determined by the best model registered.
@@ -43,6 +59,7 @@ DEFAULT_MODEL_STAGE = "Production"
 
 # Global variable to hold the loaded model and preprocessor
 model_pipeline = None
+preprocessor = None # Added global for preprocessor
 
 # --- Pydantic Models for Request and Response --- 
 class InferenceInput(BaseModel):
@@ -114,29 +131,45 @@ async def health():
 # --- Startup and Shutdown Events (Model loading will go here) ---
 @app.on_event("startup")
 async def startup_event():
-    global model_pipeline
+    global model_pipeline, preprocessor # Include preprocessor
     logger.info("Attempting to load model and preprocessor on startup...")
     try:
         logger.info(f"Setting MLflow tracking URI to: {MLFLOW_TRACKING_URI}")
         mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
+        client = mlflow.tracking.MlflowClient()
         
         model_uri = f"models:/{DEFAULT_MODEL_NAME}/{DEFAULT_MODEL_STAGE}"
         logger.info(f"Attempting to load model from URI: {model_uri}")
         
+        # Load the model itself
         model_pipeline = mlflow.sklearn.load_model(model_uri)
         logger.info(f"Successfully loaded model '{DEFAULT_MODEL_NAME}' from stage '{DEFAULT_MODEL_STAGE}'.")
+
+        # Find the run ID associated with this model version
+        model_version_details = client.get_model_version_by_alias(DEFAULT_MODEL_NAME, DEFAULT_MODEL_STAGE)
+        source_run_id = model_version_details.run_id
+        logger.info(f"Model version {model_version_details.version} in stage '{DEFAULT_MODEL_STAGE}' originates from run ID: {source_run_id}")
+
+        # Download the preprocessor artifact from that run
+        local_preprocessor_dir = "./downloaded_artifacts"
+        os.makedirs(local_preprocessor_dir, exist_ok=True)
+        local_path = client.download_artifacts(run_id=source_run_id, path="preprocessor", dst_path=local_preprocessor_dir)
+        preprocessor_path = os.path.join(local_path, "preprocessor.joblib") # Construct full path
+        logger.info(f"Downloaded preprocessor artifact to {preprocessor_path}")
         
-        # Verify if the loaded object is a scikit-learn pipeline (optional check)
-        if hasattr(model_pipeline, 'steps'):
-            logger.info("Model appears to be a scikit-learn pipeline.")
-            # You could further inspect model_pipeline.steps to see the preprocessor and model
+        # Load the preprocessor
+        if os.path.exists(preprocessor_path):
+            preprocessor = joblib.load(preprocessor_path)
+            logger.info(f"Successfully loaded preprocessor from {preprocessor_path}")
         else:
-            logger.warning("Loaded model may not be a scikit-learn pipeline. Ensure preprocessor is included.")
-            
+             logger.error(f"Preprocessor artifact not found at expected path: {preprocessor_path}")
+             preprocessor = None
+
     except Exception as e:
-        logger.error(f"Error loading model '{DEFAULT_MODEL_NAME}' from stage '{DEFAULT_MODEL_STAGE}': {e}")
+        logger.error(f"Error loading model or preprocessor: {e}")
         logger.exception("Full traceback:") # Logs the full exception traceback
-        model_pipeline = None # Ensure it's None if loading fails
+        model_pipeline = None
+        preprocessor = None
 
 @app.on_event("shutdown")
 async def shutdown_event():
@@ -145,40 +178,41 @@ async def shutdown_event():
 # --- API Endpoints --- 
 @app.post("/predict", response_model=InferenceResponse)
 async def predict(input_data: InferenceInput):
-    global model_pipeline
-    if model_pipeline is None:
-        logger.error("Model pipeline is not loaded. API cannot make predictions.")
-        raise HTTPException(status_code=503, detail="Model not loaded. API not ready for predictions.")
+    global model_pipeline, preprocessor # Include preprocessor
+    if model_pipeline is None or preprocessor is None:
+        logger.error("Model pipeline or preprocessor is not loaded. API cannot make predictions.")
+        raise HTTPException(status_code=503, detail="Model or preprocessor not loaded. API not ready for predictions.")
 
     try:
-        # Convert Pydantic model to DataFrame, handling hyphenated keys
-        input_dict = input_data.dict(by_alias=True)
+        # Convert Pydantic model to DataFrame
+        input_dict = input_data.dict()
         input_df = pd.DataFrame([input_dict])
         logger.info(f"Received input for prediction (first row): \n{input_df.head(1).to_string()}")
 
-        # Apply cleaning from src.feature_engineering
+        # Apply cleaning
         cleaned_df = clean_data(input_df.copy())
         logger.info("Applied clean_data successfully.")
 
-        # Apply feature engineering from src.feature_engineering
-        # This function should create 'age_ordinal', drop 'age', and ensure other features are ready for the preprocessor part of model_pipeline
-        # It must gracefully handle not having 'readmitted' column (which is true for API input)
+        # Apply feature engineering
         engineered_df = engineer_features(cleaned_df.copy())
         logger.info("Applied engineer_features successfully.")
         
-        # Log columns and a sample row before prediction for debugging
-        logger.debug(f"DataFrame columns for prediction: {engineered_df.columns.tolist()}")
-        if not engineered_df.empty:
-            logger.debug(f"DataFrame head for prediction (after engineering):\n{engineered_df.head(1).to_string()}")
-        else:
-            logger.warning("DataFrame is empty after feature engineering.")
-            raise ValueError("DataFrame became empty after feature engineering steps.")
+        # **Apply the loaded preprocessor**
+        logger.info(f"Applying preprocessor to engineered data. Columns: {engineered_df.columns.tolist()}")
+        preprocessed_data = preprocessor.transform(engineered_df)
+        logger.info(f"Preprocessing successful. Output shape: {preprocessed_data.shape}")
+        
+        # Log columns and a sample row before prediction for debugging - Use preprocessed data
+        # logger.debug(f"DataFrame columns for prediction: {engineered_df.columns.tolist()}")
+        # if not engineered_df.empty:
+        #     logger.debug(f"DataFrame head for prediction (after engineering):\n{engineered_df.head(1).to_string()}")
+        # else:
+        #     logger.warning("DataFrame is empty after feature engineering.")
+        #     raise ValueError("DataFrame became empty after feature engineering steps.")
 
-        # Perform prediction using the loaded pipeline (preprocessor + model)
-        # predict() returns an array of predictions
-        prediction_val = model_pipeline.predict(engineered_df)[0]
-        # predict_proba() returns an array of [[P(class_0), P(class_1)]]
-        proba_val = model_pipeline.predict_proba(engineered_df)[0]
+        # Perform prediction using the model and preprocessed data
+        prediction_val = model_pipeline.predict(preprocessed_data)[0]
+        proba_val = model_pipeline.predict_proba(preprocessed_data)[0]
         
         # The second element in proba_val corresponds to the probability of the positive class (readmission)
         positive_class_proba = proba_val[1]

@@ -82,7 +82,7 @@
     * [x] Use `feature_engineering.py`.
     * [x] **Experiment with Model Architectures:** Implement and evaluate various models (e.g., Logistic Regression, Random Forest, XGBoost, and potentially others like LightGBM or CatBoost).
     * [x] **Integrate MLflow:** Connect to MLflow server running on EC2. Log parameters, transformer artifacts (to S3 via MLflow), metrics, and tags for each model type and experiment run.
-    * [x] **Implement HPO (RayTune):** Utilize RayTune for comprehensive hyperparameter optimization across the selected model architectures. Ensure search spaces are well-defined for each model type.
+    * [x] **Implement HPO (RayTune):** Utilize RayTune for comprehensive hyperparameter optimization across the selected model architectures. Ensure search spaces are well-defined for each model type. *(Default number of trials temporarily reduced to 2 for faster debugging iterations)*
     * [x] Log the best version of each model type using `mlflow.sklearn.log_model()` or equivalent for other frameworks (artifacts go to S3).
     * [x] Execute `scripts/train_model.py` on the EC2 instance with appropriate parameters (S3 paths, MLflow URI, Ray Tune settings) to perform HPO and log all experiments and final models to MLflow (artifacts stored on S3 via MLflow).
     * [x] Verify successful script execution by checking logs and MLflow UI for logged parameters, metrics, preprocessor, and the best model for each algorithm type.
@@ -297,7 +297,7 @@
                 *   Send a POST request to `/predict`.
                 *   Assert that the HTTP status code is 422.
             *   **(Optional) Edge Case Tests:** Consider tests for edge cases specific to your data or model (e.g., all zero values for numerical inputs if relevant, specific `diag_1` codes if they have special handling).
-    * [-] **Run Automated API Tests:**
+    * [ ] **Run Automated API Tests:**
         *   [ ] Navigate to project root.
         *   [ ] Run `pytest tests/api/`.
         *   [ ] Analyze output. **Result: 3 Passed, 1 Failed (`test_predict_valid_input` - 422 Error).** Requires debugging the 422 error (payload vs Pydantic model mismatch?) and the persistent `boto3` ModuleNotFoundError preventing model load.
@@ -314,6 +314,9 @@
     * [ ] **Completion Criteria:**
         *   All automated tests in `tests/api/test_api_endpoints.py` must pass when run against the deployed API.
         *   Manual testing and verification (performed by the Human User) must confirm the API is responding correctly and gracefully to valid and basic invalid inputs.
+    * [ ] **Iterate on Fixes:** If tests fail, analyze API logs (`kubectl logs <pod-name>`), debug code in `src/api/main.py`, `src/feature_engineering.py`, check model/preprocessor loading, rebuild/redeploy API image, and re-test.
+        *   *Current Status:* Automated tests are failing due to preprocessing issues in the API. The training script (`train_model.py`) and API code (`main.py`) have been modified to correctly log, load, and apply the preprocessor artifact. The next step is to re-run the training DAG to ensure the artifact is logged, then rebuild/deploy/test the API.
+    * [ ] **Step 5: Git Commit & Push - Target: Save the working API deployment state.
 
 **Phase 4: CI/CD Automation using AWS Resources (Weeks 7-8)**
 
