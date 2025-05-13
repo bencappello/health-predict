@@ -145,10 +145,14 @@ async def startup_event():
         model_pipeline = mlflow.sklearn.load_model(model_uri)
         logger.info(f"Successfully loaded model '{DEFAULT_MODEL_NAME}' from stage '{DEFAULT_MODEL_STAGE}'.")
 
-        # Find the run ID associated with this model version
-        model_version_details = client.get_model_version_by_alias(DEFAULT_MODEL_NAME, DEFAULT_MODEL_STAGE)
-        source_run_id = model_version_details.run_id
-        logger.info(f"Model version {model_version_details.version} in stage '{DEFAULT_MODEL_STAGE}' originates from run ID: {source_run_id}")
+        # Find the run ID associated with this model version using stage instead of alias
+        model_versions = client.get_latest_versions(DEFAULT_MODEL_NAME, stages=[DEFAULT_MODEL_STAGE])
+        if not model_versions:
+            raise Exception(f"No model version found for {DEFAULT_MODEL_NAME} in stage {DEFAULT_MODEL_STAGE}")
+            
+        model_version = model_versions[0]  # Get the first version in that stage
+        source_run_id = model_version.run_id
+        logger.info(f"Model version {model_version.version} in stage '{DEFAULT_MODEL_STAGE}' originates from run ID: {source_run_id}")
 
         # Download the preprocessor artifact from that run
         local_preprocessor_dir = "./downloaded_artifacts"
@@ -184,8 +188,31 @@ async def predict(input_data: InferenceInput):
         raise HTTPException(status_code=503, detail="Model or preprocessor not loaded. API not ready for predictions.")
 
     try:
-        # Convert Pydantic model to DataFrame
-        input_dict = input_data.dict()
+        # SPECIAL HANDLING FOR COLUMN NAME MISMATCH
+        # The categorical transformer in the preprocessor expects columns like 'glyburide-metformin'
+        # But we're receiving them as 'glyburide_metformin'
+        # Get the information from the preprocessor
+        categorical_columns_with_hyphens = []
+        medication_cols_map = {}
+        try:
+            from sklearn.compose import ColumnTransformer
+            if isinstance(preprocessor, ColumnTransformer):
+                # Get the column names from the ColumnTransformer
+                transformers = preprocessor.transformers
+                for name, transformer, cols in transformers:
+                    if name == 'cat' and cols:
+                        for col in cols:
+                            if '-' in col and col.endswith('-metformin') or col.endswith('-pioglitazone') or col.endswith('-rosiglitazone'):
+                                categorical_columns_with_hyphens.append(col)
+                                # Create a mapping from underscore to hyphen version
+                                medication_cols_map[col.replace('-', '_')] = col
+            logger.info(f"Identified column name mapping needed: {medication_cols_map}")
+        except Exception as e:
+            logger.warning(f"Error extracting column names from preprocessor: {e}")
+            
+        # Convert Pydantic model to DataFrame - we need underscore column names for consistency
+        # with most of the code and feature engineering
+        input_dict = input_data.dict(by_alias=False)  # Use Python attribute names (underscores)
         input_df = pd.DataFrame([input_dict])
         logger.info(f"Received input for prediction (first row): \n{input_df.head(1).to_string()}")
 
@@ -197,19 +224,25 @@ async def predict(input_data: InferenceInput):
         engineered_df = engineer_features(cleaned_df.copy())
         logger.info("Applied engineer_features successfully.")
         
-        # **Apply the loaded preprocessor**
-        logger.info(f"Applying preprocessor to engineered data. Columns: {engineered_df.columns.tolist()}")
-        preprocessed_data = preprocessor.transform(engineered_df)
+        # Add back the columns with hyphens that the categorical transformer expects
+        # We need to rename 'glyburide_metformin' to 'glyburide-metformin' etc.
+        engineered_copy = engineered_df.copy()
+        
+        if medication_cols_map:
+            # First create new columns with hyphenated names, copying values from the underscore columns
+            for underscore_name, hyphen_name in medication_cols_map.items():
+                if underscore_name in engineered_copy.columns:
+                    engineered_copy[hyphen_name] = engineered_copy[underscore_name]
+                    # We keep both versions for now
+        
+        # Now we have dataframe with BOTH 'glyburide_metformin' AND 'glyburide-metformin' columns
+        logger.info(f"Preprocessor input data shape: {engineered_copy.shape}")
+        logger.info(f"Preprocessor columns: {engineered_copy.columns.tolist()}")
+        
+        # Apply the preprocessor
+        preprocessed_data = preprocessor.transform(engineered_copy)
         logger.info(f"Preprocessing successful. Output shape: {preprocessed_data.shape}")
         
-        # Log columns and a sample row before prediction for debugging - Use preprocessed data
-        # logger.debug(f"DataFrame columns for prediction: {engineered_df.columns.tolist()}")
-        # if not engineered_df.empty:
-        #     logger.debug(f"DataFrame head for prediction (after engineering):\n{engineered_df.head(1).to_string()}")
-        # else:
-        #     logger.warning("DataFrame is empty after feature engineering.")
-        #     raise ValueError("DataFrame became empty after feature engineering steps.")
-
         # Perform prediction using the model and preprocessed data
         prediction_val = model_pipeline.predict(preprocessed_data)[0]
         proba_val = model_pipeline.predict_proba(preprocessed_data)[0]

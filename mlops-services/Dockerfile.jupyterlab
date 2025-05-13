@@ -1,0 +1,14 @@
+FROM jupyter/scipy-notebook:latest
+
+# Copy the testing requirements file into the container
+COPY scripts/requirements-testing.txt /tmp/requirements-testing.txt
+
+# Install the testing dependencies
+RUN pip install --no-cache-dir -r /tmp/requirements-testing.txt
+
+# Clean up the requirements file
+# RUN rm /tmp/requirements-testing.txt # Commenting this out
+
+# Set the working directory (optional, as it's inherited or can be set in docker-compose)
+# USER jovyan
+# WORKDIR /home/jovyan/work 

@@ -282,6 +282,13 @@ def main(args):
                 final_val_metrics = evaluate_model(y_val_np, y_pred_val_final, y_proba_val_final)
                 mlflow.log_metrics({f"val_{k}": v for k,v in final_val_metrics.items()})
 
+                # Log the preprocessor artifact used for this model
+                if os.path.exists(local_preprocessor_path):
+                    mlflow.log_artifact(local_preprocessor_path, artifact_path="preprocessor")
+                    print(f"Logged preprocessor artifact ({local_preprocessor_path}) to Best_{model_name}_Model run {final_run.info.run_id}.")
+                else:
+                    print(f"Error: Local preprocessor path {local_preprocessor_path} not found. Cannot log preprocessor for Best_{model_name}_Model.")
+
                 # Log the model
                 mlflow.sklearn.log_model(
                     sk_model=final_model,

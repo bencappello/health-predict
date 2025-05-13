@@ -126,6 +126,21 @@ def find_and_register_best_model(**kwargs):
     f1_score = best_run['metrics.val_f1_score']
     print(f"Found best {target_model_type} run: ID {best_run_id}, F1 Score: {f1_score:.4f}")
 
+    # Check for preprocessor artifact
+    preprocessor_artifact_path = "preprocessor/preprocessor.joblib"
+    try:
+        artifacts = client.list_artifacts(best_run_id, "preprocessor")
+        preprocessor_exists = any(artifact.path == "preprocessor/preprocessor.joblib" for artifact in artifacts)
+    except Exception as e:
+        print(f"Error listing artifacts for run {best_run_id}: {e}")
+        preprocessor_exists = False
+
+    if not preprocessor_exists:
+        print(f"Preprocessor artifact '{preprocessor_artifact_path}' not found for run {best_run_id}. Skipping registration and promotion.")
+        return # Or handle as an error, perhaps by not returning an empty list if that's an issue downstream
+    else:
+        print(f"Preprocessor artifact '{preprocessor_artifact_path}' found for run {best_run_id}.")
+
     # 3. Register and transition the best model
     registered_models_info = []
     try:
