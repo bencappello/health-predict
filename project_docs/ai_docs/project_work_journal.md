@@ -122,3 +122,13 @@ Phase 3 focused on creating a robust FastAPI for model serving, containerizing i
 - Defined appropriate task dependencies to ensure correct execution order.
 - Updated `project_steps.md` to mark Phase 4, Step 1 and all its sub-tasks as complete.
 - Next step is to verify the CI/CD DAG by triggering it manually from the Airflow UI.
+
+## Phase 4: CI/CD Automation Using AWS Resources (cont'd)
+
+- Completed Phase 4, Step 2: Verified IAM permissions for the EC2 instance.
+- Confirmed the EC2 instance role has the necessary permissions for:
+  - ECR operations: Successfully authenticated with ECR using `aws ecr get-login-password` command, confirming the required permissions are in place.
+  - S3 operations: Verified that the instance has access to the S3 bucket used for MLflow artifacts (needed for model loading).
+- The deployment pipeline DAG (`health_predict_api_deployment`) is configured to work with these permissions, with appropriate authentication steps in place.
+- All IAM permissions necessary for the CI/CD pipeline execution have been confirmed to be correctly configured.
+- Next step is to test the CI/CD DAG by triggering it manually from the Airflow UI.
