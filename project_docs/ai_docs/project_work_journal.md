@@ -167,3 +167,14 @@ Phase 3 focused on creating a robust FastAPI for model serving, containerizing i
 - Successfully tested the enhanced DAG by triggering it manually and confirming all tasks completed successfully.
 - Updated `project_steps.md` to document this enhancement as sub-task 1.11 under Phase 4.
 - This improvement follows MLOps best practices by incorporating automated testing into the deployment pipeline, providing immediate feedback on the health of each deployment.
+
+## 2025-05-13 23:33:14 - Fixed Deployment DAG Scheduling Issues
+
+- Identified and fixed critical issues with the `health_predict_api_deployment` DAG:
+  1. Changed the DAG's `start_date` from a future date (2025-05-14) to `days_ago(1)` to ensure tasks are scheduled immediately when triggered
+  2. Fixed incorrect Jinja templating syntax for XCom pulls in Bash operators
+      - Changed `{{ ti.xcom_pull(task_ids="define_image_details")["full_image_uri"] }}` 
+      - To `{{ ti.xcom_pull(task_ids="define_image_details", key="full_image_uri") }}`
+- The DAG was previously reporting as "successful" with 0 second runtime, but no tasks were actually executing
+- After the fixes, confirmed the DAG is now properly running all tasks in sequence
+- These changes ensure the automated CI/CD pipeline is fully functional, enabling automatic model deployments
