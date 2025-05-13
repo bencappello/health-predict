@@ -366,3 +366,12 @@
     - Error handling for malformed JSON works as expected
     - The column name handling strategy (supporting both hyphenated and underscore formats) is working correctly
 - **Conclusion**: All manual testing requirements have been successfully completed. The API is stable, correctly processes predictions, and handles errors gracefully.
+
+## $(date +'%Y-%m-%d %H:%M:%S') - Updated Project Steps and Committed Changes
+
+- Reviewed and enhanced `project_docs/ai_docs/project_steps.md` based on project prompt, plan, system overview, and current progress.
+- Added detailed sub-tasks and explanations for remaining phases (Phase 4: CI/CD Automation, Phase 5: Drift Monitoring & Retraining Loop).
+- Introduced a new Phase 6: Documentation, Finalization & AWS Showcase, with comprehensive steps for final deliverables.
+- Staged all modified and untracked files, including several test JSON payloads and a script (`git-author-rewrite.sh`).
+- Committed all changes with message "docs: Enhance and detail remaining project steps".
+- Pushed the commit to the remote `main` branch.
