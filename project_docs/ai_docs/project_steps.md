@@ -147,5 +147,3 @@ This phase involved creating a FastAPI application to serve the best model, cont
         *   Check `kubectl describe deployment health-predict-api-deployment` to see the updated image.
         *   Confirm the `verify_deployment_rollout` task in Airflow completes successfully.
     *   [x] **Test Deployed API:** Briefly test the `/health` and `/predict` endpoints of the newly deployed API version to ensure it's operational.
-
-**Phase 5: Drift Monitoring & Retraining Loop on AWS (Next)**
