@@ -123,7 +123,7 @@ This phase involved creating a FastAPI application to serve the best model, cont
     *   [x] **Sub-task 1.10: Upload DAG to Airflow:** Copy the completed `deployment_pipeline_dag.py` to the `mlops-services/dags/` directory on the EC2 instance and ensure Airflow picks it up.
 
 2.  **IAM Permissions (Review & Confirm):**
-    *   [ ] **EC2 Instance Profile Role:** Verify the IAM role attached to your EC2 instance has sufficient permissions for:
+    *   [x] **EC2 Instance Profile Role:** Verify the IAM role attached to your EC2 instance has sufficient permissions for:
         *   **ECR:** `ecr:GetAuthorizationToken`, `ecr:BatchCheckLayerAvailability`, `ecr:GetDownloadUrlForLayer`, `ecr:BatchGetImage`, `ecr:InitiateLayerUpload`, `ecr:UploadLayerPart`, `ecr:CompleteLayerUpload`, `ecr:PutImage`. (The `AmazonEC2ContainerRegistryPowerUser` or `FullAccess` managed policies usually cover these).
         *   **S3:** Full access to the MLflow artifact bucket and data buckets (already in place for training DAGs).
         *   (No explicit K8s permissions needed here as `kubectl` commands are local to EC2, assuming `kubectl` is configured correctly).
