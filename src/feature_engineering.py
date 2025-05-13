@@ -26,10 +26,10 @@ def clean_data(df: pd.DataFrame) -> pd.DataFrame:
     cols_to_drop_present = [col for col in COLS_TO_DROP_INITIAL if col in df_cleaned.columns]
     df_cleaned.drop(columns=cols_to_drop_present, inplace=True, errors='ignore')
 
-    # Fill NaNs in specified columns with 'Missing'
+    # Fill NaNs in specified columns with 'Unknown'
     for col in COLS_FILL_NA_MISSING:
         if col in df_cleaned.columns:
-            df_cleaned[col].fillna('Missing', inplace=True)
+            df_cleaned[col].fillna('Unknown', inplace=True)
             
     # Filter out rows based on discharge_disposition_id
     if 'discharge_disposition_id' in df_cleaned.columns:

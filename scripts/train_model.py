@@ -28,6 +28,7 @@ from ray import train # Import ray.train
 from ray.tune.schedulers import ASHAScheduler # type: ignore
 from ray.tune.search.hyperopt import HyperOptSearch # type: ignore
 from ray.air.config import RunConfig # Import RunConfig
+import ray # Import ray
 
 
 def load_df_from_s3(bucket: str, key: str, s3_client: boto3.client) -> pd.DataFrame:
@@ -158,15 +159,14 @@ def main(args):
     preprocessor.fit(X_train_for_preprocessor_fitting) # Fit with X features only
 
     # Save the fitted preprocessor locally, then log it as an artifact
-    local_preprocessor_path = "preprocessor.joblib"
+    local_preprocessor_dir = "preprocessor_files"
+    os.makedirs(local_preprocessor_dir, exist_ok=True)
+    local_preprocessor_path = os.path.join(local_preprocessor_dir, "preprocessor.joblib")
     save_preprocessor(preprocessor, local_preprocessor_path)
-
-    with mlflow.start_run(run_name="Preprocessing_Run") as prep_run:
-        mlflow.log_artifact(local_preprocessor_path, artifact_path="preprocessor")
-        preprocessor_uri = mlflow.get_artifact_uri("preprocessor/preprocessor.joblib")
-        mlflow.set_tag("preprocessor_uri", preprocessor_uri)
-        print(f"Preprocessor logged to MLflow: {preprocessor_uri}")
-
+    print(f"Saved fitted preprocessor locally to {local_preprocessor_path}")
+    # Log the saved preprocessor to the current MLflow run
+    mlflow.log_artifact(local_preprocessor_path, artifact_path="preprocessor")
+    print("Logged preprocessor artifact to MLflow run.")
 
     # Use preprocess_data to transform X_train and X_val, with fit_preprocessor=False
     X_train_processed_df = preprocess_data(X_train_for_preprocessor_fitting, preprocessor, fit_preprocessor=False)
@@ -257,6 +257,9 @@ def main(args):
             print(f"Best hyperparameters for {model_name}: {best_hyperparameters}")
             print(f"Best {config_dict['metric']} for {model_name} (validation): {best_trial.metrics.get(config_dict['metric'])}")
 
+            # Ensure any previous run is ended before starting the final one
+            mlflow.end_run() 
+
             # Train final best model of this type on full training data and log it
             with mlflow.start_run(run_name=f"Best_{model_name}_Model") as final_run:
                 mlflow.log_params(best_hyperparameters)
@@ -282,19 +285,23 @@ def main(args):
                 # Log the model
                 mlflow.sklearn.log_model(
                     sk_model=final_model,
-                    artifact_path=f"models/{model_name}",
-                    # Log preprocessor with the model for easier inference later
-                    # This requires preprocessor to be available or its URI
-                    # For now, we assume preprocessor is logged separately and referenced by URI
-                    # registered_model_name=f"Best_{model_name}" # Optionally register
+                    artifact_path="model",  # Changed from f"Best_{model_name}_Model"
+                    registered_model_name=f"Best_{model_name}",
+                    serialization_format=mlflow.sklearn.SERIALIZATION_FORMAT_CLOUDPICKLE,
+                    input_example=X_train_processed_df.iloc[:5],
+                    pyfunc_predict_fn="predict_proba"
                 )
-                mlflow.log_artifact(local_preprocessor_path, artifact_path=f"models/{model_name}/preprocessor") # Log preprocessor with this model run too
-                print(f"Logged best {model_name} and its preprocessor to MLflow.")
+                print(f"Logged best {model_name} model to MLflow.")
         else:
             print(f"HPO for {model_name} did not yield a best trial result.")
             
     if os.path.exists(local_preprocessor_path): # Clean up local preprocessor file
         os.remove(local_preprocessor_path)
+        
+    # Explicitly shutdown Ray
+    ray.shutdown()
+    print("Ray instance shut down.")
+        
     print("\nTraining script finished.")
 
 
@@ -313,7 +320,7 @@ if __name__ == "__main__":
     parser.add_argument("--mlflow-experiment-name", type=str, default="HealthPredict_Training", help="MLflow experiment name.")
 
     # Ray Tune arguments
-    parser.add_argument("--ray-num-samples", type=int, default=10, help="Number of HPO trials per model.")
+    parser.add_argument("--ray-num-samples", type=int, default=2, help="Number of HPO trials per model.")
     parser.add_argument("--ray-max-epochs-per-trial", type=int, default=10, help="Max T for ASHAScheduler.") # For tree models, not epochs but can be seen as max iterations
     parser.add_argument("--ray-grace-period", type=int, default=1, help="Grace period for ASHAScheduler.")
     parser.add_argument("--ray-local-dir", type=str, default="~/ray_results", help="Directory for Ray Tune to store results.")

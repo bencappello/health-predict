@@ -3,8 +3,9 @@ import requests
 import os
 import copy # For deep copying payloads
 
-# Get the API base URL from environment variable or use default
-API_BASE_URL = os.getenv("API_BASE_URL", "http://192.168.49.2:30854")
+# Define the base URL for the API running in Minikube
+API_BASE_URL = "http://192.168.49.2:30887" # Replace with the actual URL from `minikube service ... --url`
+HEALTH_URL = f"{API_BASE_URL}/health"
 PREDICT_URL = f"{API_BASE_URL}/predict"
 
 # --- Health Check Test ---
@@ -13,45 +14,42 @@ def test_health_check():
     """
     Tests the /health endpoint to ensure the API is running and the model is loaded.
     """
-    health_url = f"{API_BASE_URL}/health"
     try:
-        response = requests.get(health_url, timeout=10)
+        response = requests.get(HEALTH_URL, timeout=10)
         response.raise_for_status()
         assert response.status_code == 200
         response_json = response.json()
         assert response_json.get("status") == "ok"
         # assert response_json.get("model_status") == "loaded" # Comment out for now as model isn't loading
         # Check that the message indicates model isn't loaded (adjust if API message changes)
-        assert "model is not loaded" in response_json.get("message", "").lower()
+        assert "model is loaded" in response_json.get("message", "").lower()
         print(f"Health check passed (model loading check adapted): {response_json}")
     except requests.exceptions.RequestException as e:
-        pytest.fail(f"Request to {health_url} failed: {e}")
+        pytest.fail(f"Request to {HEALTH_URL} failed: {e}")
     except Exception as e:
         pytest.fail(f"An unexpected error occurred during health check: {e}")
 
 # --- Predict Endpoint Tests ---
 
-# IMPORTANT: This sample payload is a placeholder.
-# You MUST adjust it to match the exact 44 features and data types
-# expected by your API's InferenceInput Pydantic model in src/api/main.py.
+# Placeholder - Update with realistic data based on your model's features
+# This needs to match the InferenceInput Pydantic model in src/api/main.py.
 SAMPLE_VALID_PAYLOAD = {
-    "race": "Caucasian",
     "gender": "Female",
-    "age": "[70-80)", # String for age category
-    "admission_type_id": 1,
-    "discharge_disposition_id": 1,
-    "admission_source_id": 7,
-    "time_in_hospital": 5, # Integer
-    "num_lab_procedures": 40,
-    "num_procedures": 1,
-    "num_medications": 15,
-    "number_outpatient": 0,
-    "number_emergency": 0,
-    "number_inpatient": 0,
-    "diag_1": "250.80",
-    "diag_2": "428.0",
-    "diag_3": "401.9",
-    "number_diagnoses": 9,
+    "age": "[70-80)",
+    "admission-type-id": 1,
+    "discharge-disposition-id": 1,
+    "admission-source-id": 7,
+    "time-in-hospital": 5,
+    "num-lab-procedures": 40,
+    "num-procedures": 1,
+    "num-medications": 15,
+    "number-outpatient": 0,
+    "number-emergency": 0,
+    "number-inpatient": 0,
+    "diag_1": "250.8",  # Example diagnosis code (ensure format is correct)
+    "diag_2": "428",    # Example diagnosis code
+    "diag_3": "401",    # Example diagnosis code
+    "number-diagnoses": 9,
     "max_glu_serum": "None",
     "A1Cresult": "None",
     "metformin": "No",
@@ -78,8 +76,9 @@ SAMPLE_VALID_PAYLOAD = {
     "metformin-rosiglitazone": "No",
     "metformin-pioglitazone": "No",
     "change": "No",
-    "diabetesMed": "No",
-    # Placeholder for the 44th feature if needed - you must complete this based on your API
+    "diabetesMed": "No"
+    # Note: Removed 'race' as it wasn't in the missing fields list. Add if needed.
+    # Add other fields if the model expects more than these.
 }
 
 def test_predict_valid_input():
@@ -94,10 +93,12 @@ def test_predict_valid_input():
         assert response_json["prediction"] in [0, 1]
         assert 0.0 <= response_json["probability_score"] <= 1.0
         print(f"Predict valid input test passed: {response_json}")
+    except requests.exceptions.HTTPError as e:
+        if e.response.status_code == 422:
+            print(f"Received 422 Error. Response body: {e.response.text}")
+        pytest.fail(f"Request to {PREDICT_URL} with valid input failed: {e}")
     except requests.exceptions.RequestException as e:
         pytest.fail(f"Request to {PREDICT_URL} with valid input failed: {e}")
-    except Exception as e:
-        pytest.fail(f"An unexpected error occurred during predict valid input test: {e}")
 
 def test_predict_missing_field():
     """Tests the /predict endpoint with a payload missing a required field."""

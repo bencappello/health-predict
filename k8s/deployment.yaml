@@ -5,12 +5,11 @@ metadata:
   labels:
     app: health-predict-api
 spec:
-  replicas: 2
+  replicas: 1
   strategy:
     type: RollingUpdate
     rollingUpdate:
       maxUnavailable: 1
-      maxSurge: 1
   selector:
     matchLabels:
       app: health-predict-api
@@ -19,15 +18,17 @@ spec:
       labels:
         app: health-predict-api
     spec:
+      imagePullSecrets:
+        - name: ecr-registry-key
       containers:
         - name: health-predict-api-container
           image: 536474293413.dkr.ecr.us-east-1.amazonaws.com/health-predict-api:latest
-          imagePullPolicy: IfNotPresent
+          imagePullPolicy: Always
           ports:
             - containerPort: 8000
           env:
             - name: MLFLOW_TRACKING_URI
-              value: "http://host.minikube.internal:5000" # May need to be EC2_PRIVATE_IP if host.minikube.internal doesn't resolve
+              value: "http://host.minikube.internal:5000"
             # Add other necessary environment variables like model name, stage if not hardcoded in API
             # - name: MODEL_NAME
             #   value: "HealthPredict_RandomForest"

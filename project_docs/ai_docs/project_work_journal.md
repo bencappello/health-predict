@@ -265,3 +265,28 @@
   - **`boto3` Issue:** Confirmed via pod logs and `kubectl exec` that `boto3` is still missing from the container, preventing model loading, despite multiple attempts to fix via `requirements.txt`, Dockerfile changes, and `--no-cache` builds. The root cause of the build process not installing `boto3` correctly remains unresolved and highly perplexing.
   - **422 Error:** Removed an extra key from `SAMPLE_VALID_PAYLOAD` in `test_api_endpoints.py`, but the 422 error persists on the valid input test. A visual comparison of the payload and the Pydantic model (`InferenceInput`) did not reveal obvious discrepancies in keys or types. API logs did not provide specific validation field errors.
 - Updated `project_steps.md` to reflect the partial completion and the outstanding issues.
+
+## $(date +'%Y-%m-%d %H:%M:%S') - Debugged API Preprocessing Logic
+
+- **Deployed API to Minikube:** Successfully deployed the containerized API to the local Minikube cluster on EC2, resolving several issues:
+    - Re-authenticated Minikube's Docker daemon to ECR multiple times.
+    - Ultimately used an `ImagePullSecret` for reliable ECR authentication.
+    - Addressed pod scheduling issues (`Insufficient cpu`) by reducing replicas.
+    - Resolved API startup failures (`Could not import module "src.api.main"`) by adjusting Dockerfile workdir/CMD and removing problematic volume mounts.
+    - Ensured MLflow/Airflow services were running on the EC2 host via Docker Compose.
+- **Diagnosed Model Loading & Prediction Failures:**
+    - Encountered `mlflow.exceptions.MlflowException: Registered Model ... not found` when MLflow DB was lost; resolved by re-running Airflow DAG.
+    - Faced S3 `404 Not Found` when model artifact wasn't uploaded; resolved by modifying `scripts/train_model.py` to log artifact to `model/` path and re-running DAG.
+    - Addressed `AttributeError: 'DecisionTreeClassifier' object has no attribute 'monotonic_cst'` by pinning `scikit-learn==1.3.2` in API requirements to match training environment.
+    - Overcame ECR push permission errors by correcting AWS account ID and ensuring correct IAM role permissions (user intervention required).
+    - Resolved persistent `Connection refused` errors in `pytest` by updating the hardcoded `API_BASE_URL` in `tests/api/test_api_endpoints.py` to use the correct NodePort.
+    - Fixed `422 Unprocessable Entity` errors by updating the test payload keys to match the API's Pydantic model aliases (kebab-case).
+- **Identified Preprocessing Mismatch:**
+    - Tests failed with `400 Bad Request` caused by `ValueError: could not convert string to float: 'Missing'` (later `'Unknown'`) during model prediction.
+    - **Root Cause:** The API was loading only the raw model, not the preprocessor. It was then applying manual cleaning/engineering and passing the resulting DataFrame (with string categoricals) directly to the raw model, which expects a preprocessed numerical array.
+    - **Solution Implemented:**
+        - Modified `scripts/train_model.py` to log the fitted `ColumnTransformer` (preprocessor) as an MLflow artifact (`preprocessor/preprocessor.joblib`) alongside the model.
+        - Modified `src/api/main.py` startup logic to load both the model and its corresponding preprocessor artifact from MLflow.
+        - Modified `src/api/main.py` `/predict` endpoint to apply the loaded preprocessor's `.transform()` method to the engineered data before passing it to the model.
+- **Optimization:** Reduced the default number of HPO trials (`--ray-num-samples`) in `scripts/train_model.py` from 10 to 2 to accelerate DAG runs during this debugging phase.
+- **Next Step:** Re-run the training DAG to log the preprocessor artifact correctly, then rebuild/redeploy the API and run tests.
