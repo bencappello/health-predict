@@ -121,6 +121,16 @@ This phase involved creating a FastAPI application to serve the best model, cont
             ```
     *   [x] **Sub-task 1.9: Define Task Dependencies:** Set the correct order of execution for these tasks.
     *   [x] **Sub-task 1.10: Upload DAG to Airflow:** Copy the completed `deployment_pipeline_dag.py` to the `mlops-services/dags/` directory on the EC2 instance and ensure Airflow picks it up.
+    *   [x] **Sub-task 1.11: Enhance DAG with Automated API Testing:**
+        *   Add a new task after `verify_deployment_rollout` to run the API test suite.
+        *   Name: `run_api_tests`.
+        *   Bash Command:
+            ```bash
+            cd /home/ubuntu/health-predict && \
+            python -m pytest tests/api/test_api_endpoints.py -v
+            ```
+        *   This ensures that the newly deployed API version passes all tests before considering the deployment complete.
+        *   Update task dependencies to include this new test task at the end of the workflow.
 
 2.  **IAM Permissions (Review & Confirm):**
     *   [x] **EC2 Instance Profile Role:** Verify the IAM role attached to your EC2 instance has sufficient permissions for:

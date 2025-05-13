@@ -111,6 +111,7 @@ This script handles the end-to-end training process for multiple model types (Lo
         *   Authenticates with and pushes the image to ECR.
         *   Updates the Kubernetes deployment on Minikube to use the new image (`kubectl set image`).
         *   Verifies the deployment rollout.
+        *   Runs automated API tests to ensure the deployed API functions correctly, validating both `/health` and `/predict` endpoints with various test cases.
 *   **`monitoring_retraining_dag.py` (Planned):**
     *   Simulates arrival of new data batches from `future_data.csv`.
     *   Executes `scripts/monitor_drift.py` (using Evidently AI) to detect data and concept drift against a reference dataset.

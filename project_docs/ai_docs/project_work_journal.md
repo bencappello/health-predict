@@ -155,3 +155,15 @@ Phase 3 focused on creating a robust FastAPI for model serving, containerizing i
   - Tested the `/predict` endpoint using a test payload, which successfully returned a prediction.
 - Updated `project_steps.md` to mark all sub-tasks in Phase 4, Step 3 as completed.
 - Next phase to begin: Phase 5 - Drift Monitoring & Retraining Loop on AWS.
+
+## 2025-05-13 20:34:04 - Enhanced CI/CD Pipeline with Automated API Testing
+
+- Identified a gap in the CI/CD pipeline: no automated API testing after deployment.
+- Implemented a solution by enhancing the `health_predict_api_deployment` DAG with a new task:
+  - Added `run_api_tests` task that executes the existing pytest test suite (`tests/api/test_api_endpoints.py`) after deployment.
+  - The test suite validates both the `/health` endpoint and the `/predict` endpoint with various test cases (valid inputs, missing fields, invalid data types).
+  - This ensures that each deployment is automatically verified to be working correctly before being considered complete.
+- Updated the task dependencies to include this new test task at the end of the workflow.
+- Successfully tested the enhanced DAG by triggering it manually and confirming all tasks completed successfully.
+- Updated `project_steps.md` to document this enhancement as sub-task 1.11 under Phase 4.
+- This improvement follows MLOps best practices by incorporating automated testing into the deployment pipeline, providing immediate feedback on the health of each deployment.

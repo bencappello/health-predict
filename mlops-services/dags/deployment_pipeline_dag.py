@@ -183,5 +183,16 @@ verify_deployment_rollout = BashOperator(
     dag=dag,
 )
 
+# Task 8: Run API tests to ensure the deployed API works correctly
+run_api_tests = BashOperator(
+    task_id='run_api_tests',
+    bash_command="""
+    cd /home/ubuntu/health-predict && \
+    echo "Running API tests against the newly deployed version..." && \
+    python -m pytest tests/api/test_api_endpoints.py -v
+    """,
+    dag=dag,
+)
+
 # Define the task dependencies
-get_production_model_info_task >> define_image_details_task >> authenticate_docker_to_ecr >> build_api_docker_image >> push_image_to_ecr >> update_kubernetes_deployment >> verify_deployment_rollout 
+get_production_model_info_task >> define_image_details_task >> authenticate_docker_to_ecr >> build_api_docker_image >> push_image_to_ecr >> update_kubernetes_deployment >> verify_deployment_rollout >> run_api_tests 
