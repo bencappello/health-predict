@@ -337,3 +337,32 @@
 - **Next Steps**:
     - Consider refactoring the preprocessor to consistently use either hyphenated or underscore column names to avoid this type of mismatch in the future.
     - Add more comprehensive API tests for edge cases and error handling.
+
+## 2025-05-14: Completed Manual API Testing
+
+- **Goal**: Perform thorough manual testing of the deployed API endpoints to verify functionality beyond automated tests.
+- **Testing Environment**:
+    - API endpoint URL: `http://192.168.49.2:30887` (Minikube NodePort service)
+    - Testing performed from the EC2 instance using curl commands
+- **Tests Performed**:
+    1. **Health Endpoint Test**:
+        - Executed `curl http://192.168.49.2:30887/health`
+        - Received correct response: `{"status":"ok","message":"API is healthy and model is loaded."}`
+    2. **Prediction Endpoint Tests with Valid Payloads**:
+        - Created three different test payloads (`test_payload1.json`, `test_payload2.json`, `test_payload3.json`) with varying patient characteristics:
+            - Elderly female patient with no medication usage
+            - Middle-aged male patient with diabetes on metformin and insulin
+            - Elderly male patient with multiple hospital visits and comorbidities
+        - All three payloads returned valid predictions with appropriate probability scores
+        - Notably, the third patient profile with more complex conditions resulted in a positive readmission prediction (1) with probability 0.531, while simpler cases were predicted as no readmission (0)
+    3. **Error Handling Tests**:
+        - Tested with malformed payload missing required fields (`malformed_payload2.json`)
+        - Tested with invalid data type (`malformed_payload1.json`) using a string instead of integer for admission-type-id
+        - Tested with syntactically invalid JSON missing closing brace (`invalid_json.json`)
+        - In all error cases, the API responded with appropriate 422 status codes and detailed error messages
+- **Observations**:
+    - The API correctly processes valid requests and returns logical predictions
+    - Input validation is working properly with appropriate error messages for invalid inputs
+    - Error handling for malformed JSON works as expected
+    - The column name handling strategy (supporting both hyphenated and underscore formats) is working correctly
+- **Conclusion**: All manual testing requirements have been successfully completed. The API is stable, correctly processes predictions, and handles errors gracefully.
