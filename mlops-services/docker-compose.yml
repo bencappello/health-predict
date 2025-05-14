@@ -79,19 +79,22 @@ services:
       - ./dags:/opt/airflow/dags
       - ./logs:/opt/airflow/logs
       - ./plugins:/opt/airflow/plugins
-      - ../scripts:/home/jovyan/work/scripts
-      - ../src:/home/jovyan/work/src
+      - ../scripts:/opt/airflow/scripts
+      - ../src:/opt/airflow/src
       - /var/run/docker.sock:/var/run/docker.sock
       - /home/ubuntu/health-predict:/home/ubuntu/health-predict
+      - /home/ubuntu/.kube:/home/airflow/.kube:ro
+      - /home/ubuntu/.minikube:/home/ubuntu/.minikube:ro
     environment:
-      AIRFLOW__CORE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres:5432/airflowdb
+      AIRFLOW__CORE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@localhost:5432/airflowdb
       AIRFLOW__CORE__EXECUTOR: LocalExecutor
-      PYTHONPATH: /home/jovyan/work
+      PYTHONPATH: /opt/airflow/src:/opt/airflow/scripts
       HOME: /home/airflow
+      KUBECONFIG: /home/airflow/.kube/config
       DOCKER_CONFIG: /home/airflow/.docker
+      MLFLOW_SERVER: localhost
     command: airflow scheduler
-    networks:
-      - mlops_network
+    network_mode: "host"
 
   mlflow:
     build:

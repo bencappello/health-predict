@@ -33,4 +33,8 @@ RUN pip install --no-cache-dir \
     pandas>=2.0.0 \
     scikit-learn>=1.3.0 \
     ray[tune]>=2.9.0 \
-    xgboost>=2.0.0 
+    xgboost>=2.0.0 \
+    boto3>=1.28.0 \
+    apache-airflow-providers-docker>=3.0.0 \
+    apache-airflow-providers-cncf-kubernetes>=7.0.0 \
+    kubernetes 
