@@ -3,8 +3,25 @@ from airflow.operators.bash import BashOperator
 from airflow.operators.python import PythonOperator
 from datetime import datetime, timedelta
 from airflow.utils.dates import days_ago
+from airflow.exceptions import AirflowFailException
+import boto3
+import json
+import base64
+import subprocess
 import mlflow
 import os
+
+# Get environment variables
+env_vars = {
+    'MLFLOW_SERVER': os.getenv('MLFLOW_SERVER', 'mlflow'),
+    'ECR_REPOSITORY': os.getenv('ECR_REPOSITORY', '536474293413.dkr.ecr.us-east-1.amazonaws.com/health-predict-api'),
+    'AWS_REGION': os.getenv('AWS_REGION', 'us-east-1'),
+    'MODEL_NAME': os.getenv('MODEL_NAME', 'HealthPredict_RandomForest'),
+    'MODEL_STAGE': os.getenv('MODEL_STAGE', 'Production'),
+    'K8S_DEPLOYMENT_NAME': os.getenv('K8S_DEPLOYMENT_NAME', 'health-predict-api-deployment'),
+    'K8S_CONTAINER_NAME': os.getenv('K8S_CONTAINER_NAME', 'health-predict-api'),
+    'EC2_PRIVATE_IP': os.getenv('EC2_PRIVATE_IP', '10.0.0.123'),
+}
 
 # Define default arguments for the DAG
 default_args = {
@@ -27,78 +44,52 @@ dag = DAG(
     tags=['health-predict', 'deployment', 'k8s'],
 )
 
-# Define environment variables
-env_vars = {
-    'MLFLOW_TRACKING_URI': 'http://mlflow:5000',
-    'MODEL_NAME': 'HealthPredict_RandomForest',  # Target registered model name
-    'MODEL_STAGE': 'Production',  # Target stage to deploy
-    'ECR_REPOSITORY': '536474293413.dkr.ecr.us-east-1.amazonaws.com/health-predict-api',  # ECR repository URI
-    'AWS_REGION': 'us-east-1',  # AWS region for ECR
-    'K8S_DEPLOYMENT_NAME': 'health-predict-api-deployment',  # Kubernetes deployment name
-    'K8S_CONTAINER_NAME': 'health-predict-api-container',  # Container name in Kubernetes deployment
-    'EC2_PRIVATE_IP': '10.0.1.99',  # EC2 private IP for MLFLOW_TRACKING_URI in K8s
-}
-
-# Task 1: Get latest production model information
 def get_production_model_info(**kwargs):
-    """
-    Fetches information about the latest model in Production stage from MLflow.
-    """
-    mlflow_uri = kwargs['params']['mlflow_uri']
-    model_name = kwargs['params']['model_name']
-    model_stage = kwargs['params']['model_stage']
+    """Get information about the production version of the model from MLflow Model Registry."""
+    ti = kwargs['ti']
+    mlflow.set_tracking_uri(f"http://{env_vars['MLFLOW_SERVER']}:5000")
+    print(f"Setting MLflow tracking URI to: {mlflow.get_tracking_uri()}")
     
-    print(f"Setting MLflow tracking URI to: {mlflow_uri}")
-    mlflow.set_tracking_uri(mlflow_uri)
-    client = mlflow.tracking.MlflowClient()
+    model_name = env_vars['MODEL_NAME']
+    model_stage = env_vars['MODEL_STAGE']
     
     print(f"Searching for {model_name} model in {model_stage} stage")
-    try:
-        # Get latest model version in Production stage
-        latest_versions = client.get_latest_versions(name=model_name, stages=[model_stage])
-        
-        if not latest_versions:
-            raise ValueError(f"No {model_name} model found in {model_stage} stage")
-        
-        # Get the most recent version
-        production_model = latest_versions[0]
-        model_version = production_model.version
-        model_run_id = production_model.run_id
-        model_source = production_model.source
-        
-        print(f"Found model: {model_name} version {model_version}, run_id: {model_run_id}")
-        print(f"Model source: {model_source}")
-        
-        # Return model information for XCom
-        return {
-            "model_name": model_name,
-            "model_version": model_version,
-            "model_run_id": model_run_id,
-            "model_source": model_source
-        }
-        
-    except Exception as e:
-        print(f"Error getting model information: {e}")
-        raise
+    
+    client = mlflow.tracking.MlflowClient()
+    
+    # Get the latest version of the model in the specified stage
+    latest_versions = client.get_latest_versions(name=model_name, stages=[model_stage])
+    
+    if not latest_versions:
+        raise ValueError(f"No model named {model_name} found in stage {model_stage}")
+    
+    # Get the latest version
+    model_version = latest_versions[0]
+    
+    # Get the run ID and source (uri) of the model
+    model_run_id = model_version.run_id
+    model_source = mlflow.artifacts.download_artifacts(run_id=model_run_id, artifact_path="model")
+    
+    print(f"Found model: {model_name} version {model_version.version}, run_id: {model_run_id}")
+    print(f"Model source: {model_source}")
+    
+    # Return model details
+    return {
+        "model_name": model_name,
+        "model_version": model_version.version,
+        "model_run_id": model_run_id,
+        "model_source": model_source
+    }
 
-# Task 2: Define image URI and tag
 def define_image_details(**kwargs):
-    """
-    Defines the full ECR image URI with a unique tag based on model version and timestamp.
-    """
-    ti = kwargs['ti']
-    ecr_repository = kwargs['params']['ecr_repository']
-    model_info = ti.xcom_pull(task_ids='get_production_model_info')
+    """Define Docker image tag and full URI."""
+    # Get current timestamp for the image tag
+    current_time = datetime.now().strftime('%Y%m%d%H%M%S')
     
-    if not model_info:
-        raise ValueError("Failed to get model information from previous task")
+    # Construct image tag and URI
+    image_tag = f"v2-{current_time}"
+    full_image_uri = f"{env_vars['ECR_REPOSITORY']}:{image_tag}"
     
-    # Create unique tag using model version and timestamp
-    model_version = model_info['model_version']
-    timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
-    image_tag = f"v{model_version}-{timestamp}"
-    
-    full_image_uri = f"{ecr_repository}:{image_tag}"
     print(f"Defined image URI: {full_image_uri}")
     
     return {
@@ -106,85 +97,214 @@ def define_image_details(**kwargs):
         "full_image_uri": full_image_uri
     }
 
-# Task 1: Get latest production model information
+def build_and_push_docker_image(**kwargs):
+    """Build and push Docker image using values from XCom."""
+    # Get the image URI directly from the define_image_details function
+    image_details = define_image_details()
+    image_uri = image_details['full_image_uri']
+    
+    print(f"Building Docker image with tag: {image_uri}")
+    
+    # Build the Docker image
+    build_command = f"cd /home/ubuntu/health-predict && docker build -t {image_uri} ."
+    print(f"Executing command: {build_command}")
+    
+    try:
+        # First test if we can access the directory
+        process = subprocess.run(
+            "ls -la /home/ubuntu/health-predict",
+            shell=True,
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True
+        )
+        print(f"Directory listing output: {process.stdout}")
+        if process.returncode != 0:
+            print(f"Error listing directory: {process.stderr}")
+            raise AirflowFailException(f"Failed to access directory: {process.stderr}")
+            
+        # Now try to build the image
+        process = subprocess.run(
+            build_command,
+            shell=True,
+            check=False,  # Don't raise exception so we can log the error
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True
+        )
+        
+        if process.returncode != 0:
+            print(f"Error building Docker image: {process.stderr}")
+            raise AirflowFailException(f"Failed to build Docker image: {process.stderr}")
+        
+        print(f"Docker build output: {process.stdout}")
+        
+        # Push the Docker image to ECR
+        print(f"Pushing Docker image: {image_uri}")
+        push_command = f"docker push {image_uri}"
+        process = subprocess.run(
+            push_command,
+            shell=True,
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True
+        )
+        
+        if process.returncode != 0:
+            print(f"Error pushing Docker image: {process.stderr}")
+            raise AirflowFailException(f"Failed to push Docker image: {process.stderr}")
+            
+        print(f"Docker push output: {process.stdout}")
+        
+        return {
+            "image_uri": image_uri,
+            "build_success": True,
+            "push_success": True
+        }
+    except Exception as e:
+        print(f"Exception during Docker operations: {str(e)}")
+        raise AirflowFailException(f"Docker operations failed: {str(e)}")
+
+def update_kubernetes_deployment(**kwargs):
+    """Update the Kubernetes deployment with the new image and environment variables."""
+    # Call the build_and_push_docker_image function directly to get the image URI
+    build_result = kwargs.get('build_result')
+    if not build_result:
+        # Use a direct call if not passed in
+        build_result = build_and_push_docker_image()
+    
+    image_uri = build_result['image_uri']
+    print(f"Updating Kubernetes deployment to use image: {image_uri}")
+    
+    # Update the Kubernetes deployment
+    deployment_name = env_vars['K8S_DEPLOYMENT_NAME']
+    container_name = env_vars['K8S_CONTAINER_NAME']
+    
+    # Update the container image
+    update_command = f"kubectl set image deployment/{deployment_name} {container_name}={image_uri} --record"
+    process = subprocess.run(
+        update_command,
+        shell=True,
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True
+    )
+    print(f"Kubernetes update output: {process.stdout}")
+    
+    # Set environment variables in the deployment
+    env_command = f"kubectl set env deployment/{deployment_name} MLFLOW_TRACKING_URI=http://{env_vars['EC2_PRIVATE_IP']}:5000"
+    process = subprocess.run(
+        env_command,
+        shell=True,
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True
+    )
+    print(f"Kubernetes env update output: {process.stdout}")
+    
+    return {
+        "deployment_name": deployment_name,
+        "container_name": container_name,
+        "image_uri": image_uri,
+        "update_success": True
+    }
+
+def verify_deployment_rollout(**kwargs):
+    """Verify that the Kubernetes deployment has been successfully rolled out."""
+    # Get deployment info directly
+    deployment_info = kwargs.get('deployment_info')
+    if not deployment_info:
+        # Use direct call if not passed in
+        deployment_info = update_kubernetes_deployment()
+    
+    deployment_name = deployment_info['deployment_name']
+    
+    # Check the rollout status
+    print(f"Verifying rollout of deployment: {deployment_name}")
+    rollout_command = f"kubectl rollout status deployment/{deployment_name} --timeout=5m"
+    process = subprocess.run(
+        rollout_command,
+        shell=True,
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True
+    )
+    print(f"Rollout status: {process.stdout}")
+    
+    # Get service URL
+    service_command = "minikube service health-predict-api-service --url"
+    process = subprocess.run(
+        service_command,
+        shell=True,
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True
+    )
+    service_url = process.stdout.strip()
+    print(f"Health Predict API service is accessible at: {service_url}")
+    
+    return {
+        "deployment_name": deployment_name,
+        "rollout_success": True,
+        "service_url": service_url
+    }
+
+# Task 1: Get production model info from MLflow
 get_production_model_info_task = PythonOperator(
     task_id='get_production_model_info',
     python_callable=get_production_model_info,
-    params={
-        'mlflow_uri': env_vars['MLFLOW_TRACKING_URI'],
-        'model_name': env_vars['MODEL_NAME'],
-        'model_stage': env_vars['MODEL_STAGE']
-    },
     dag=dag,
 )
 
-# Task 2: Define image URI and tag
+# Task 2: Define image details (tag, URI)
 define_image_details_task = PythonOperator(
     task_id='define_image_details',
     python_callable=define_image_details,
+    dag=dag,
+)
+
+# Task 3: ECR Login using AWS CLI
+ecr_login_task = BashOperator(
+    task_id='ecr_login',
+    bash_command=(
+        "aws ecr get-login-password --region {{ params.region }} | "
+        "docker login --username AWS --password-stdin {{ params.registry }}"
+    ),
     params={
-        'ecr_repository': env_vars['ECR_REPOSITORY']
+        "region": env_vars["AWS_REGION"],
+        "registry": env_vars["ECR_REPOSITORY"].split("/")[0],
     },
     dag=dag,
 )
 
-# Task 3: Authenticate Docker with ECR
-authenticate_docker_to_ecr = BashOperator(
-    task_id='authenticate_docker_to_ecr',
-    bash_command=f"""
-    aws ecr get-login-password --region {env_vars['AWS_REGION']} | docker login --username AWS --password-stdin {env_vars['ECR_REPOSITORY'].split('/')[0]}
-    """,
+# Task 4: Build and push Docker image
+build_and_push_image = PythonOperator(
+    task_id='build_and_push_docker_image',
+    python_callable=build_and_push_docker_image,
     dag=dag,
 )
 
-# Task 4: Build Docker image
-build_api_docker_image = BashOperator(
-    task_id='build_api_docker_image',
-    bash_command="""
-    cd /home/ubuntu/health-predict && \
-    docker build -t {{ ti.xcom_pull(task_ids="define_image_details", key="full_image_uri") }} .
-    """,
-    dag=dag,
-)
-
-# Task 5: Push Docker image to ECR
-push_image_to_ecr = BashOperator(
-    task_id='push_image_to_ecr',
-    bash_command="""
-    docker push {{ ti.xcom_pull(task_ids="define_image_details", key="full_image_uri") }}
-    """,
-    dag=dag,
-)
-
-# Task 6: Update Kubernetes deployment
-update_kubernetes_deployment = BashOperator(
+# Task 5: Update Kubernetes deployment
+update_k8s_deployment = PythonOperator(
     task_id='update_kubernetes_deployment',
-    bash_command=f"""
-    kubectl set image deployment/{env_vars['K8S_DEPLOYMENT_NAME']} \
-      {env_vars['K8S_CONTAINER_NAME']}={{ ti.xcom_pull(task_ids="define_image_details", key="full_image_uri") }} \
-      --record
-    
-    # Ensure MLFLOW_TRACKING_URI is set correctly in the deployment
-    kubectl set env deployment/{env_vars['K8S_DEPLOYMENT_NAME']} \
-      MLFLOW_TRACKING_URI=http://{env_vars['EC2_PRIVATE_IP']}:5000
-    """,
+    python_callable=update_kubernetes_deployment,
     dag=dag,
 )
 
-# Task 7: Verify deployment rollout
-verify_deployment_rollout = BashOperator(
+# Task 6: Verify deployment rollout
+verify_k8s_deployment = PythonOperator(
     task_id='verify_deployment_rollout',
-    bash_command=f"""
-    kubectl rollout status deployment/{env_vars['K8S_DEPLOYMENT_NAME']} --timeout=5m
-    
-    # Get service URL for user convenience
-    echo "Health Predict API service is accessible at:"
-    minikube service health-predict-api-service --url
-    """,
+    python_callable=verify_deployment_rollout,
     dag=dag,
 )
 
-# Task 8: Run API tests to ensure the deployed API works correctly
+# Task 9: Run API tests to ensure the deployed API works correctly
 run_api_tests = BashOperator(
     task_id='run_api_tests',
     bash_command="""
@@ -196,4 +316,4 @@ run_api_tests = BashOperator(
 )
 
 # Define the task dependencies
-get_production_model_info_task >> define_image_details_task >> authenticate_docker_to_ecr >> build_api_docker_image >> push_image_to_ecr >> update_kubernetes_deployment >> verify_deployment_rollout >> run_api_tests 
+get_production_model_info_task >> define_image_details_task >> ecr_login_task >> build_and_push_image >> update_k8s_deployment >> verify_k8s_deployment >> run_api_tests 

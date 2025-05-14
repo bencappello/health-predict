@@ -81,10 +81,14 @@ services:
       - ./plugins:/opt/airflow/plugins
       - ../scripts:/home/jovyan/work/scripts
       - ../src:/home/jovyan/work/src
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /home/ubuntu/health-predict:/home/ubuntu/health-predict
     environment:
-      - AIRFLOW__CORE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@postgres:5432/airflowdb
-      - AIRFLOW__CORE__EXECUTOR=LocalExecutor
-      - PYTHONPATH=/home/jovyan/work
+      AIRFLOW__CORE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres:5432/airflowdb
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      PYTHONPATH: /home/jovyan/work
+      HOME: /home/airflow
+      DOCKER_CONFIG: /home/airflow/.docker
     command: airflow scheduler
     networks:
       - mlops_network
