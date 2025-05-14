@@ -10,6 +10,7 @@ import base64
 import subprocess
 import mlflow
 import os
+from kubernetes import client, config
 
 # Get environment variables
 env_vars = {
@@ -20,6 +21,7 @@ env_vars = {
     'MODEL_STAGE': os.getenv('MODEL_STAGE', 'Production'),
     'K8S_DEPLOYMENT_NAME': os.getenv('K8S_DEPLOYMENT_NAME', 'health-predict-api-deployment'),
     'K8S_CONTAINER_NAME': os.getenv('K8S_CONTAINER_NAME', 'health-predict-api'),
+    'K8S_SERVICE_NAME': os.getenv('K8S_SERVICE_NAME', 'health-predict-api-service'),
     'EC2_PRIVATE_IP': os.getenv('EC2_PRIVATE_IP', '10.0.0.123'),
 }
 
@@ -99,25 +101,35 @@ def define_image_details(**kwargs):
 
 def build_and_push_docker_image(**kwargs):
     """Build and push Docker image using values from XCom."""
-    # Get the image URI directly from the define_image_details function
-    image_details = define_image_details()
+    ti = kwargs['ti']
+    # Get the image URI from the define_image_details_task via XCom
+    image_details = ti.xcom_pull(task_ids='define_image_details')
+    if not image_details or 'full_image_uri' not in image_details:
+        raise AirflowFailException("Could not pull image_details from XCom task 'define_image_details'")
     image_uri = image_details['full_image_uri']
     
     print(f"Building Docker image with tag: {image_uri}")
     
-    # Build the Docker image
-    build_command = f"cd /home/ubuntu/health-predict && docker build -t {image_uri} ."
-    print(f"Executing command: {build_command}")
+    docker_build_command_list = ["docker", "build", "-t", image_uri, "."]
+    print(f"Executing command list: {docker_build_command_list} in /home/ubuntu/health-predict")
     
     try:
+        print(f"Python CWD: {os.getcwd()}")
+        print(f"Python root dir listing: {os.listdir('/')}")
+        try:
+            print(f"Python /home/ubuntu dir listing: {os.listdir('/home/ubuntu')}")
+        except Exception as e:
+            print(f"Error listing /home/ubuntu: {str(e)}")
+
         # First test if we can access the directory
         process = subprocess.run(
-            "ls -la /home/ubuntu/health-predict",
+            "ls -la",
             shell=True,
             check=False,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            text=True
+            text=True,
+            cwd="/home/ubuntu/health-predict"
         )
         print(f"Directory listing output: {process.stdout}")
         if process.returncode != 0:
@@ -126,12 +138,13 @@ def build_and_push_docker_image(**kwargs):
             
         # Now try to build the image
         process = subprocess.run(
-            build_command,
-            shell=True,
-            check=False,  # Don't raise exception so we can log the error
+            docker_build_command_list,
+            shell=False,
+            check=False,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            text=True
+            text=True,
+            cwd="/home/ubuntu/health-predict"
         )
         
         if process.returncode != 0:
@@ -142,14 +155,15 @@ def build_and_push_docker_image(**kwargs):
         
         # Push the Docker image to ECR
         print(f"Pushing Docker image: {image_uri}")
-        push_command = f"docker push {image_uri}"
+        docker_push_command_list = ["docker", "push", image_uri]
         process = subprocess.run(
-            push_command,
-            shell=True,
+            docker_push_command_list,
+            shell=False,
             check=False,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            text=True
+            text=True,
+            cwd="/home/ubuntu/health-predict"
         )
         
         if process.returncode != 0:
@@ -168,44 +182,99 @@ def build_and_push_docker_image(**kwargs):
         raise AirflowFailException(f"Docker operations failed: {str(e)}")
 
 def update_kubernetes_deployment(**kwargs):
-    """Update the Kubernetes deployment with the new image and environment variables."""
-    # Call the build_and_push_docker_image function directly to get the image URI
-    build_result = kwargs.get('build_result')
-    if not build_result:
-        # Use a direct call if not passed in
-        build_result = build_and_push_docker_image()
-    
+    ti = kwargs['ti']
+    build_result = ti.xcom_pull(task_ids='build_and_push_docker_image')
+    if not build_result or 'image_uri' not in build_result:
+        raise AirflowFailException("Missing image_uri in XCom from build_and_push_docker_image")
+
     image_uri = build_result['image_uri']
-    print(f"Updating Kubernetes deployment to use image: {image_uri}")
-    
-    # Update the Kubernetes deployment
     deployment_name = env_vars['K8S_DEPLOYMENT_NAME']
     container_name = env_vars['K8S_CONTAINER_NAME']
-    
-    # Update the container image
-    update_command = f"kubectl set image deployment/{deployment_name} {container_name}={image_uri} --record"
-    process = subprocess.run(
-        update_command,
-        shell=True,
-        check=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True
-    )
-    print(f"Kubernetes update output: {process.stdout}")
-    
-    # Set environment variables in the deployment
-    env_command = f"kubectl set env deployment/{deployment_name} MLFLOW_TRACKING_URI=http://{env_vars['EC2_PRIVATE_IP']}:5000"
-    process = subprocess.run(
-        env_command,
-        shell=True,
-        check=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True
-    )
-    print(f"Kubernetes env update output: {process.stdout}")
-    
+    namespace = "default" # Or your target namespace
+
+    print(f"Attempting to update deployment '{deployment_name}' in namespace '{namespace}' to image '{image_uri}'")
+
+    try:
+        print("Loading Kubernetes configuration...")
+        # config.load_incluster_config() # Use this if Airflow itself runs in K8s
+        config.load_kube_config() # Assumes Kubeconfig is in default loc (~/.kube/config) or KUBECONFIG env var is set
+        print("Kubernetes configuration loaded.")
+    except Exception as e:
+        print(f"Error loading Kubeconfig: {str(e)}")
+        # Fallback: try specific path if default loading fails (for debugging, less ideal for prod)
+        try:
+            print("Attempting to load Kubeconfig from /home/airflow/.kube/config")
+            config.load_kube_config(config_file="/home/airflow/.kube/config")
+            print("Successfully loaded Kubeconfig from /home/airflow/.kube/config")
+        except Exception as e2:
+            raise AirflowFailException(f"Failed to load kubeconfig from default and specific path /home/airflow/.kube/config. Default error: {str(e)}. Specific path error: {str(e2)}")
+
+    api = client.AppsV1Api()
+    print("AppsV1Api client created.")
+
+    # Define the patch for the image update
+    image_patch = {
+        "spec": {
+            "template": {
+                "spec": {
+                    "containers": [
+                        {
+                            "name": container_name,
+                            "image": image_uri
+                        }
+                    ]
+                }
+            }
+        }
+    }
+
+    try:
+        print(f"Patching deployment '{deployment_name}' with new image...")
+        api.patch_namespaced_deployment(
+            name=deployment_name,
+            namespace=namespace,
+            body=image_patch
+        )
+        print(f"Deployment '{deployment_name}' patched successfully with image '{image_uri}'.")
+    except client.exceptions.ApiException as e:
+        print(f"Kubernetes API Exception when patching image: {e.status} - {e.reason} - {e.body}")
+        raise AirflowFailException(f"Failed to patch deployment image: Status {e.status} - {e.reason} - Body: {e.body}")
+    except Exception as e:
+        raise AirflowFailException(f"An unexpected error occurred when patching deployment image: {str(e)}")
+
+    # Define the patch for the environment variable update
+    env_patch = {
+        "spec": {
+            "template": {
+                "spec": {
+                    "containers": [
+                        {
+                            "name": container_name,
+                            "env": [
+                                {"name": "MLFLOW_TRACKING_URI", 
+                                 "value": f"http://{env_vars['EC2_PRIVATE_IP']}:5000"}
+                            ]
+                        }
+                    ]
+                }
+            }
+        }
+    }
+
+    try:
+        print(f"Patching deployment '{deployment_name}' with new environment variables...")
+        api.patch_namespaced_deployment(
+            name=deployment_name,
+            namespace=namespace,
+            body=env_patch
+        )
+        print(f"Deployment '{deployment_name}' patched successfully with environment variables.")
+    except client.exceptions.ApiException as e:
+        print(f"Kubernetes API Exception when patching env vars: {e.status} - {e.reason} - {e.body}")
+        raise AirflowFailException(f"Failed to patch deployment env vars: Status {e.status} - {e.reason} - Body: {e.body}")
+    except Exception as e:
+        raise AirflowFailException(f"An unexpected error occurred when patching deployment env vars: {str(e)}")
+
     return {
         "deployment_name": deployment_name,
         "container_name": container_name,
@@ -214,46 +283,82 @@ def update_kubernetes_deployment(**kwargs):
     }
 
 def verify_deployment_rollout(**kwargs):
-    """Verify that the Kubernetes deployment has been successfully rolled out."""
-    # Get deployment info directly
-    deployment_info = kwargs.get('deployment_info')
-    if not deployment_info:
-        # Use direct call if not passed in
-        deployment_info = update_kubernetes_deployment()
-    
+    ti = kwargs['ti']
+    deployment_info = ti.xcom_pull(task_ids='update_kubernetes_deployment')
+    if not deployment_info or 'deployment_name' not in deployment_info:
+        raise AirflowFailException("Missing deployment_name in XCom from update_kubernetes_deployment")
+
     deployment_name = deployment_info['deployment_name']
-    
-    # Check the rollout status
-    print(f"Verifying rollout of deployment: {deployment_name}")
-    rollout_command = f"kubectl rollout status deployment/{deployment_name} --timeout=5m"
-    process = subprocess.run(
-        rollout_command,
-        shell=True,
-        check=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True
-    )
-    print(f"Rollout status: {process.stdout}")
-    
-    # Get service URL
-    service_command = "minikube service health-predict-api-service --url"
-    process = subprocess.run(
-        service_command,
-        shell=True,
-        check=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True
-    )
-    service_url = process.stdout.strip()
-    print(f"Health Predict API service is accessible at: {service_url}")
-    
-    return {
-        "deployment_name": deployment_name,
-        "rollout_success": True,
-        "service_url": service_url
-    }
+    namespace = "default" # Or your target namespace
+    timeout_seconds = 300
+
+    print(f"Verifying rollout status for deployment '{deployment_name}' in namespace '{namespace}'...")
+
+    try:
+        config.load_kube_config() # Load Kubeconfig
+    except Exception as e:
+        # Fallback for debugging, less ideal for prod
+        try:
+            config.load_kube_config(config_file="/home/airflow/.kube/config")
+        except Exception as e2:
+            raise AirflowFailException(f"Failed to load kubeconfig (default or specific path) for rollout verification. Default err: {str(e)}. Specific path err: {str(e2)}")
+
+    api = client.AppsV1Api()
+    watch = client.Watch()
+
+    print(f"Watching deployment '{deployment_name}' for rollout completion (timeout: {timeout_seconds}s)...")
+    try:
+        for event in watch.stream(
+            api.read_namespaced_deployment_status,
+            name=deployment_name,
+            namespace=namespace,
+            timeout_seconds=timeout_seconds
+        ):
+            deployment_obj = event["object"]
+            status = deployment_obj.status
+            # Generation check ensures we are observing changes related to our update
+            if (status.updated_replicas == deployment_obj.spec.replicas and
+                status.replicas == deployment_obj.spec.replicas and
+                status.available_replicas == deployment_obj.spec.replicas and
+                status.observed_generation >= deployment_obj.metadata.generation):
+                print(f"Deployment '{deployment_name}' rollout successful.")
+                watch.stop()
+                # Minikube service URL fetch - this part remains tricky if minikube CLI isn't on PATH or if not using minikube
+                service_url = "Unavailable (Minikube command not run)"
+                if env_vars.get('K8S_CONTEXT_TYPE', 'minikube') == 'minikube': # Example, you might need better logic
+                    try:
+                        minikube_profile = env_vars.get('MINIKUBE_PROFILE', 'minikube')
+                        service_command_list = ["minikube", f"--profile={minikube_profile}", "-n", namespace, "service", env_vars['K8S_SERVICE_NAME'], "--url"]
+                        print(f"Fetching service URL with command: {' '.join(service_command_list)}")
+                        process = subprocess.run(
+                            service_command_list, 
+                            check=True, 
+                            capture_output=True, 
+                            text=True, 
+                            timeout=60
+                        )
+                        service_url = process.stdout.strip()
+                        print(f"Service URL for '{env_vars['K8S_SERVICE_NAME']}': {service_url}")
+                    except FileNotFoundError:
+                        print("Minikube CLI not found. Cannot fetch service URL.")
+                        service_url = "Unavailable (Minikube CLI not found)"
+                    except subprocess.CalledProcessError as e:
+                        print(f"Minikube service command failed: {e.stderr}")
+                        service_url = f"Unavailable (Minikube error: {e.stderr[:100]}...)"
+                    except Exception as e:
+                        print(f"Error fetching Minikube service URL: {str(e)}")
+                        service_url = f"Unavailable (Error: {str(e)[:100]}...)"
+                return {"deployment_name": deployment_name, "rollout_success": True, "service_url": service_url}
+            else:
+                print(f"Deployment '{deployment_name}' status: Updated: {status.updated_replicas}/{deployment_obj.spec.replicas}, Available: {status.available_replicas}/{deployment_obj.spec.replicas}, Generation: {status.observed_generation}/{deployment_obj.metadata.generation}")
+    except client.exceptions.ApiException as e:
+        if e.status == 404:
+            raise AirflowFailException(f"Deployment '{deployment_name}' not found in namespace '{namespace}' during watch.")
+        raise AirflowFailException(f"Kubernetes API error watching deployment rollout: {e.status} - {e.reason} - {e.body}")
+    except Exception as e:
+        raise AirflowFailException(f"Error watching deployment rollout: {str(e)}")
+
+    raise AirflowFailException(f"Deployment '{deployment_name}' did not rollout successfully within {timeout_seconds} seconds.")
 
 # Task 1: Get production model info from MLflow
 get_production_model_info_task = PythonOperator(
@@ -290,14 +395,14 @@ build_and_push_image = PythonOperator(
     dag=dag,
 )
 
-# Task 5: Update Kubernetes deployment
+# Task 5: Update Kubernetes deployment (Now uses Python K8s client)
 update_k8s_deployment = PythonOperator(
     task_id='update_kubernetes_deployment',
     python_callable=update_kubernetes_deployment,
     dag=dag,
 )
 
-# Task 6: Verify deployment rollout
+# Task 6: Verify deployment rollout (Now uses Python K8s client)
 verify_k8s_deployment = PythonOperator(
     task_id='verify_deployment_rollout',
     python_callable=verify_deployment_rollout,
