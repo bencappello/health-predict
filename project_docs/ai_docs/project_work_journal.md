@@ -178,3 +178,31 @@ Phase 3 focused on creating a robust FastAPI for model serving, containerizing i
 - The DAG was previously reporting as "successful" with 0 second runtime, but no tasks were actually executing
 - After the fixes, confirmed the DAG is now properly running all tasks in sequence
 - These changes ensure the automated CI/CD pipeline is fully functional, enabling automatic model deployments
+
+## 2025-05-14: Debugging CI/CD Docker Authentication and kubectl, Uncovered MLflow Model Issue
+
+*   **Goal**: Resolve persistent "no basic auth credentials" for `docker push` in Airflow deployment DAG and ensure `kubectl` is available.
+*   **Initial State**: DAG failing at `build_and_push_docker_image` due to Docker auth, and later at `update_kubernetes_deployment` due to `kubectl` not found.
+*   **Actions & Observations**:
+    *   Attempted "Fix A" (explicit `--config` for `docker push`): Failed, same auth error.
+    *   Attempted "Fix B" (ensuring `HOME` and `DOCKER_CONFIG` env vars in `docker-compose.yml`): Failed, same auth error.
+    *   Implemented "Fix C" (direct `aws ecr get-login-password ... | docker login ...` in a BashOperator):
+        *   This successfully resolved the Docker authentication issue. The `ecr_login` and `build_and_push_docker_image` tasks passed.
+    *   Addressed `kubectl: not found` error by adding `kubectl` installation to `mlops-services/Dockerfile.airflow`.
+    *   Encountered Docker Compose build issues (`KeyError: 'ContainerConfig'`), resolved by a full Docker prune (`docker-compose down -v --remove-orphans && docker system prune -af && docker-compose up -d --build`).
+    *   Discovered the `health_predict_api_deployment` DAG was paused, preventing runs from executing. Unpaused the DAG.
+*   **Final State**: 
+    *   DAG run `manual__2025-05-14T02:31:37+00:00` is now successfully executing past the Docker push and Kubernetes connection steps.
+    *   The DAG now fails at the `get_production_model_info` task.
+    *   **Error**: `mlflow.exceptions.RestException: RESOURCE_DOES_NOT_EXIST: Registered Model with name=HealthPredict_RandomForest not found`.
+*   **Next Steps**: Investigate MLflow Model Registry to ensure `HealthPredict_RandomForest` model is registered and promoted to the `Production` stage, or update the DAG to use the correct model name/stage. 
+
+## $(date +'%Y-%m-%d %H:%M:%S') - Resumed CI/CD DAG Monitoring and Debugging
+
+*   Resumed work after hitting a tool call limit.
+*   Attempted to run `scripts/airflow_dag_monitor.py health_predict_api_deployment` but encountered `python: command not found`.
+*   Corrected to `python3 scripts/airflow_dag_monitor.py health_predict_api_deployment`, which then failed due to missing `--dag_id` argument.
+*   Successfully launched the monitor script with `python3 scripts/airflow_dag_monitor.py --dag_id health_predict_api_deployment`. The script is now running in the background.
+*   The previous DAG run `manual__2025-05-14T02:31:37+00:00` had failed at `get_production_model_info` because the `HealthPredict_RandomForest` model was not found in the MLflow Model Registry.
+*   The fixes for `start_date` and XCom syntax were applied prior to this, and a new DAG run was triggered (likely `manual__2025-05-14T00:13:58+00:00` mentioned in the summary as being in a "running" state, although this needs verification once the monitor script provides output or via direct CLI checks).
+*   The immediate next step is to analyze the output of the monitoring script (or check Airflow CLI) to understand the status of the latest DAG run and see if the `get_production_model_info` task passes or if the model registry issue persists. 
