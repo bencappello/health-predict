@@ -63,20 +63,20 @@ This phase involved creating a FastAPI application to serve the best model, cont
         *   Create a new Python file `deployment_pipeline_dag.py` in the `mlops-services/dags/` directory.
         *   Define `dag_id` (e.g., `health_predict_api_deployment`), `schedule_interval=None` (for manual trigger or trigger from another DAG), `catchup=False`, and appropriate `default_args` (start_date, owner, retries).
         *   Consider Airflow `Params` for the DAG if you want to manually specify things like `MODEL_NAME` or `MODEL_STAGE` at trigger time, though fetching the latest "Production" is usually preferred.
-    *   [x] **Sub-task 1.2: Task 1 - Get Latest Production Model Information (`PythonOperator`):**
+    *   [ ] **Sub-task 1.2: Task 1 - Get Latest Production Model Information (`PythonOperator`):**
         *   Name: `get_production_model_info`.
         *   Python Callable: A function that uses the MLflow client (`mlflow.tracking.MlflowClient()`).
             *   Set tracking URI: `mlflow.set_tracking_uri("http://mlflow:5000")`.
             *   Input: `MODEL_NAME` (e.g., "HealthPredict_RandomForest").
             *   Logic: Fetch the latest version of the model in the "Production" stage using `client.get_latest_versions(name=MODEL_NAME, stages=["Production"])`.
             *   Output: Push the `model_uri` (e.g., `versions[0].source`) and `run_id` (e.g., `versions[0].run_id`) to XComs. The `run_id` is crucial for fetching co-located artifacts like the preprocessor if needed by the API build process (though the current API loads at runtime).
-    *   [x] **Sub-task 1.3: Task 2 - Define Image URI and Tag (`PythonOperator` or `BashOperator`):**
+    *   [ ] **Sub-task 1.3: Task 2 - Define Image URI and Tag (`PythonOperator` or `BashOperator`):**
         *   Name: `define_image_details`.
         *   Logic: Construct the full ECR image URI and a new unique tag.
             *   ECR Base URI: `<your-aws-account-id>.dkr.ecr.<your-aws-region>.amazonaws.com/<your-ecr-repo-name>` (e.g., `536474293413.dkr.ecr.us-east-1.amazonaws.com/health-predict-api`).
             *   Tag Strategy: Use the Airflow DAG run ID (`{{ run_id }}`), a timestamp (`{{ ts_nodash }}`), or the model version being deployed. Example: `latest` or `model_v{{ ti.xcom_pull(task_ids="get_production_model_info", key="model_version") }}`.
             *   Output: Push `FULL_IMAGE_URI` (e.g., `<ECR_BASE_URI>:<TAG>`) to XComs.
-    *   [x] **Sub-task 1.4: Task 3 - Build Docker Image (`BashOperator`):**
+    *   [ ] **Sub-task 1.4: Task 3 - Build Docker Image (`BashOperator`):**
         *   Name: `build_api_docker_image`.
         *   Bash Command:
             ```bash
@@ -85,7 +85,7 @@ This phase involved creating a FastAPI application to serve the best model, cont
         *   Ensure the command is executed from the project root directory (`/home/ubuntu/health-predict/`) which is the Docker build context.
         *   The existing `Dockerfile` at the project root will be used.
         *   The Airflow worker (EC2 instance) must have Docker installed.
-    *   [x] **Sub-task 1.5: Task 4 - Authenticate Docker with ECR (`BashOperator`):**
+    *   [ ] **Sub-task 1.5: Task 4 - Authenticate Docker with ECR (`BashOperator`):**
         *   Name: `authenticate_docker_to_ecr`.
         *   Bash Command:
             ```bash
@@ -93,13 +93,13 @@ This phase involved creating a FastAPI application to serve the best model, cont
             ```
             *   Replace `<your-aws-region>` and `<your-aws-account-id>` (e.g., `us-east-1`, `536474293413`).
         *   The Airflow worker needs AWS CLI installed and configured with necessary IAM permissions (via EC2 instance profile).
-    *   [x] **Sub-task 1.6: Task 5 - Push Docker Image to ECR (`BashOperator`):**
+    *   [ ] **Sub-task 1.6: Task 5 - Push Docker Image to ECR (`BashOperator`):**
         *   Name: `push_image_to_ecr`.
         *   Bash Command:
             ```bash
             docker push {{ ti.xcom_pull(task_ids="define_image_details", key="FULL_IMAGE_URI") }}
             ```
-    *   [x] **Sub-task 1.7: Task 6 - Update Kubernetes Deployment (`BashOperator`):**
+    *   [ ] **Sub-task 1.7: Task 6 - Update Kubernetes Deployment (`BashOperator`):**
         *   Name: `update_kubernetes_deployment`.
         *   Bash Command:
             ```bash
@@ -113,15 +113,15 @@ This phase involved creating a FastAPI application to serve the best model, cont
             *   `health-predict-api-container` is the name of the container within your pod spec.
             *   `--record` is deprecated but was used to record the command in rollout history; consider using alternative audit methods if needed.
         *   The Airflow worker needs `kubectl` installed and configured with the context for the local Minikube/Kind cluster.
-    *   [x] **Sub-task 1.8: Task 7 - Verify Deployment Rollout (`BashOperator`):**
+    *   [ ] **Sub-task 1.8: Task 7 - Verify Deployment Rollout (`BashOperator`):**
         *   Name: `verify_deployment_rollout`.
         *   Bash Command:
             ```bash
             kubectl rollout status deployment/health-predict-api-deployment --timeout=5m
             ```
-    *   [x] **Sub-task 1.9: Define Task Dependencies:** Set the correct order of execution for these tasks.
-    *   [x] **Sub-task 1.10: Upload DAG to Airflow:** Copy the completed `deployment_pipeline_dag.py` to the `mlops-services/dags/` directory on the EC2 instance and ensure Airflow picks it up.
-    *   [x] **Sub-task 1.11: Enhance DAG with Automated API Testing:**
+    *   [ ] **Sub-task 1.9: Define Task Dependencies:** Set the correct order of execution for these tasks.
+    *   [ ] **Sub-task 1.10: Upload DAG to Airflow:** Copy the completed `deployment_pipeline_dag.py` to the `mlops-services/dags/` directory on the EC2 instance and ensure Airflow picks it up.
+    *   [ ] **Sub-task 1.11: Enhance DAG with Automated API Testing:**
         *   Add a new task after `verify_deployment_rollout` to run the API test suite.
         *   Name: `run_api_tests`.
         *   Bash Command:
@@ -139,11 +139,11 @@ This phase involved creating a FastAPI application to serve the best model, cont
         *   (No explicit K8s permissions needed here as `kubectl` commands are local to EC2, assuming `kubectl` is configured correctly).
 
 3.  **Testing CI/CD DAG:**
-    *   [x] **Trigger DAG Manually:** From the Airflow UI, trigger the `health_predict_api_deployment` DAG.
-    *   [x] **Monitor Task Logs:** Observe the logs for each task in the Airflow UI to ensure successful execution and troubleshoot any errors.
-    *   [x] **Verify ECR Image:** Check your ECR repository in the AWS console to confirm the new Docker image was pushed with the correct tag.
-    *   [x] **Verify Kubernetes Update:**
+    *   [ ] **Trigger DAG Manually:** From the Airflow UI, trigger the `health_predict_api_deployment` DAG.
+    *   [ ] **Monitor Task Logs:** Observe the logs for each task in the Airflow UI to ensure successful execution and troubleshoot any errors.
+    *   [ ] **Verify ECR Image:** Check your ECR repository in the AWS console to confirm the new Docker image was pushed with the correct tag.
+    *   [ ] **Verify Kubernetes Update:**
         *   Use `kubectl get pods -l app=health-predict-api` to see new pods being created and old ones terminating.
         *   Check `kubectl describe deployment health-predict-api-deployment` to see the updated image.
         *   Confirm the `verify_deployment_rollout` task in Airflow completes successfully.
-    *   [x] **Test Deployed API:** Briefly test the `/health` and `/predict` endpoints of the newly deployed API version to ensure it's operational.
+    *   [ ] **Test Deployed API:** Briefly test the `/health` and `/predict` endpoints of the newly deployed API version to ensure it's operational.
