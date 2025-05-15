@@ -8,8 +8,9 @@ import pandas as pd
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import joblib
+from fastapi import status
 
 # Attempt to import feature engineering functions
 try:
@@ -35,7 +36,11 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(level
 logger = logging.getLogger(__name__)
 
 # Initialize FastAPI app
-app = FastAPI(title="Health Predict API", version="0.1.0")
+app = FastAPI(
+    title="Health Prediction API",
+    description="API for predicting health outcomes using an ML model.",
+    version="0.1.0"
+)
 
 # Add custom exception handler for validation errors
 @app.exception_handler(RequestValidationError)
@@ -51,15 +56,12 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     )
 
 # MLflow Configuration (Ideally, use environment variables)
-MLFLOW_TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI", "http://mlflow:5000")
-# Specific model name and stage will be determined by the best model registered.
-# These are placeholders and might be loaded dynamically or set more specifically.
-DEFAULT_MODEL_NAME = "HealthPredict_RandomForest" # Example, will be refined
-DEFAULT_MODEL_STAGE = "Production"
+MLFLOW_TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI", "http://localhost:5000") # Default for local dev
+MODEL_NAME = os.getenv("MODEL_NAME", "HealthPredict_RandomForest") 
+MODEL_STAGE = os.getenv("MODEL_STAGE", "Production")
 
-# Global variable to hold the loaded model and preprocessor
-model_pipeline = None
-preprocessor = None # Added global for preprocessor
+# Global variable for the model
+model = None
 
 # --- Pydantic Models for Request and Response --- 
 class InferenceInput(BaseModel):
@@ -119,61 +121,28 @@ class InferenceResponse(BaseModel):
 # --- API Endpoints (to be defined later) ---
 
 # Health check endpoint
-@app.get("/health")
-async def health():
-    # Basic health check
-    if model_pipeline is not None:
-        return {"status": "ok", "message": "API is healthy and model is loaded."}
-    else:
-        # This case might indicate the startup event hasn't finished or failed
-        return {"status": "ok", "message": "API is healthy, but model is not loaded yet or loading failed."}
+@app.get("/health", status_code=status.HTTP_200_OK)
+async def health_check():
+    """
+    Simple health check endpoint.
+    """
+    return {"status": "healthy", "model_loaded": model is not None}
 
 # --- Startup and Shutdown Events (Model loading will go here) ---
 @app.on_event("startup")
-async def startup_event():
-    global model_pipeline, preprocessor # Include preprocessor
-    logger.info("Attempting to load model and preprocessor on startup...")
+async def load_model_on_startup():
+    global model
     try:
-        logger.info(f"Setting MLflow tracking URI to: {MLFLOW_TRACKING_URI}")
         mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
-        client = mlflow.tracking.MlflowClient()
-        
-        model_uri = f"models:/{DEFAULT_MODEL_NAME}/{DEFAULT_MODEL_STAGE}"
-        logger.info(f"Attempting to load model from URI: {model_uri}")
-        
-        # Load the model itself
-        model_pipeline = mlflow.sklearn.load_model(model_uri)
-        logger.info(f"Successfully loaded model '{DEFAULT_MODEL_NAME}' from stage '{DEFAULT_MODEL_STAGE}'.")
-
-        # Find the run ID associated with this model version using stage instead of alias
-        model_versions = client.get_latest_versions(DEFAULT_MODEL_NAME, stages=[DEFAULT_MODEL_STAGE])
-        if not model_versions:
-            raise Exception(f"No model version found for {DEFAULT_MODEL_NAME} in stage {DEFAULT_MODEL_STAGE}")
-            
-        model_version = model_versions[0]  # Get the first version in that stage
-        source_run_id = model_version.run_id
-        logger.info(f"Model version {model_version.version} in stage '{DEFAULT_MODEL_STAGE}' originates from run ID: {source_run_id}")
-
-        # Download the preprocessor artifact from that run
-        local_preprocessor_dir = "./downloaded_artifacts"
-        os.makedirs(local_preprocessor_dir, exist_ok=True)
-        local_path = client.download_artifacts(run_id=source_run_id, path="preprocessor", dst_path=local_preprocessor_dir)
-        preprocessor_path = os.path.join(local_path, "preprocessor.joblib") # Construct full path
-        logger.info(f"Downloaded preprocessor artifact to {preprocessor_path}")
-        
-        # Load the preprocessor
-        if os.path.exists(preprocessor_path):
-            preprocessor = joblib.load(preprocessor_path)
-            logger.info(f"Successfully loaded preprocessor from {preprocessor_path}")
-        else:
-             logger.error(f"Preprocessor artifact not found at expected path: {preprocessor_path}")
-             preprocessor = None
-
+        model_uri = f"models:/{MODEL_NAME}/{MODEL_STAGE}"
+        print(f"Loading model from URI: {model_uri} via MLflow server: {MLFLOW_TRACKING_URI}")
+        model = mlflow.pyfunc.load_model(model_uri)
+        print(f"Model '{MODEL_NAME}' version from stage '{MODEL_STAGE}' loaded successfully.")
     except Exception as e:
-        logger.error(f"Error loading model or preprocessor: {e}")
-        logger.exception("Full traceback:") # Logs the full exception traceback
-        model_pipeline = None
-        preprocessor = None
+        print(f"Error loading model: {e}")
+        # Depending on policy, you might want to prevent startup or allow startup without model
+        # For now, we\'ll let it start and log the error. Predictions will fail.
+        model = None
 
 @app.on_event("shutdown")
 async def shutdown_event():
@@ -182,34 +151,12 @@ async def shutdown_event():
 # --- API Endpoints --- 
 @app.post("/predict", response_model=InferenceResponse)
 async def predict(input_data: InferenceInput):
-    global model_pipeline, preprocessor # Include preprocessor
-    if model_pipeline is None or preprocessor is None:
-        logger.error("Model pipeline or preprocessor is not loaded. API cannot make predictions.")
-        raise HTTPException(status_code=503, detail="Model or preprocessor not loaded. API not ready for predictions.")
+    global model
+    if model is None:
+        logger.error("Model is not loaded. API cannot make predictions.")
+        raise HTTPException(status_code=503, detail="Model not loaded. API not ready for predictions.")
 
     try:
-        # SPECIAL HANDLING FOR COLUMN NAME MISMATCH
-        # The categorical transformer in the preprocessor expects columns like 'glyburide-metformin'
-        # But we're receiving them as 'glyburide_metformin'
-        # Get the information from the preprocessor
-        categorical_columns_with_hyphens = []
-        medication_cols_map = {}
-        try:
-            from sklearn.compose import ColumnTransformer
-            if isinstance(preprocessor, ColumnTransformer):
-                # Get the column names from the ColumnTransformer
-                transformers = preprocessor.transformers
-                for name, transformer, cols in transformers:
-                    if name == 'cat' and cols:
-                        for col in cols:
-                            if '-' in col and col.endswith('-metformin') or col.endswith('-pioglitazone') or col.endswith('-rosiglitazone'):
-                                categorical_columns_with_hyphens.append(col)
-                                # Create a mapping from underscore to hyphen version
-                                medication_cols_map[col.replace('-', '_')] = col
-            logger.info(f"Identified column name mapping needed: {medication_cols_map}")
-        except Exception as e:
-            logger.warning(f"Error extracting column names from preprocessor: {e}")
-            
         # Convert Pydantic model to DataFrame - we need underscore column names for consistency
         # with most of the code and feature engineering
         input_dict = input_data.dict(by_alias=False)  # Use Python attribute names (underscores)
@@ -224,28 +171,9 @@ async def predict(input_data: InferenceInput):
         engineered_df = engineer_features(cleaned_df.copy())
         logger.info("Applied engineer_features successfully.")
         
-        # Add back the columns with hyphens that the categorical transformer expects
-        # We need to rename 'glyburide_metformin' to 'glyburide-metformin' etc.
-        engineered_copy = engineered_df.copy()
-        
-        if medication_cols_map:
-            # First create new columns with hyphenated names, copying values from the underscore columns
-            for underscore_name, hyphen_name in medication_cols_map.items():
-                if underscore_name in engineered_copy.columns:
-                    engineered_copy[hyphen_name] = engineered_copy[underscore_name]
-                    # We keep both versions for now
-        
-        # Now we have dataframe with BOTH 'glyburide_metformin' AND 'glyburide-metformin' columns
-        logger.info(f"Preprocessor input data shape: {engineered_copy.shape}")
-        logger.info(f"Preprocessor columns: {engineered_copy.columns.tolist()}")
-        
-        # Apply the preprocessor
-        preprocessed_data = preprocessor.transform(engineered_copy)
-        logger.info(f"Preprocessing successful. Output shape: {preprocessed_data.shape}")
-        
-        # Perform prediction using the model and preprocessed data
-        prediction_val = model_pipeline.predict(preprocessed_data)[0]
-        proba_val = model_pipeline.predict_proba(preprocessed_data)[0]
+        # Apply the model
+        prediction_val = model.predict(engineered_df)[0]
+        proba_val = model.predict_proba(engineered_df)[0]
         
         # The second element in proba_val corresponds to the probability of the positive class (readmission)
         positive_class_proba = proba_val[1]

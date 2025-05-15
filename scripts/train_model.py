@@ -68,6 +68,10 @@ def train_model_hpo(config, X_train, y_train, X_val, y_val, model_name):
     Trainable function for Ray Tune.
     Trains a model with given hyperparameters and logs to MLflow.
     """
+    # Set tracking URI and experiment in each Ray worker process
+    mlflow.set_tracking_uri(os.getenv("MLFLOW_TRACKING_URI", "http://mlflow:5000"))
+    mlflow.set_experiment(os.getenv("MLFLOW_EXPERIMENT_NAME", "HealthPredict_Training_HPO_Airflow"))
+    
     mlflow.start_run(nested=True) # Start a nested run for each trial
     mlflow.log_params(config)
     mlflow.set_tag("model_name", model_name)
