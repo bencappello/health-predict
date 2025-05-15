@@ -45,7 +45,7 @@ env_vars = {
 run_training_and_hpo = BashOperator(
     task_id='run_training_and_hpo',
     bash_command='''
-    python /home/jovyan/work/scripts/train_model.py \
+    python /home/ubuntu/health-predict/scripts/train_model.py \
         --s3-bucket-name {{ params.s3_bucket_name }} \
         --train-key {{ params.train_key }} \
         --validation-key {{ params.validation_key }} \

@@ -10,7 +10,8 @@ import base64
 import subprocess
 import mlflow
 import os
-from kubernetes import client, config
+from kubernetes import client, config, watch
+import time
 
 # Get environment variables
 env_vars = {
@@ -20,7 +21,7 @@ env_vars = {
     'MODEL_NAME': os.getenv('MODEL_NAME', 'HealthPredict_RandomForest'),
     'MODEL_STAGE': os.getenv('MODEL_STAGE', 'Production'),
     'K8S_DEPLOYMENT_NAME': os.getenv('K8S_DEPLOYMENT_NAME', 'health-predict-api-deployment'),
-    'K8S_CONTAINER_NAME': os.getenv('K8S_CONTAINER_NAME', 'health-predict-api'),
+    'K8S_CONTAINER_NAME': os.getenv('K8S_CONTAINER_NAME', 'health-predict-api-container'),
     'K8S_SERVICE_NAME': os.getenv('K8S_SERVICE_NAME', 'health-predict-api-service'),
     'EC2_PRIVATE_IP': os.getenv('EC2_PRIVATE_IP', '10.0.0.123'),
 }
@@ -31,7 +32,7 @@ default_args = {
     'depends_on_past': False,
     'email_on_failure': False,
     'email_on_retry': False,
-    'retries': 1,
+    'retries': 0,
     'retry_delay': timedelta(minutes=5),
 }
 
@@ -74,7 +75,7 @@ def get_production_model_info(**kwargs):
     
     print(f"Found model: {model_name} version {model_version.version}, run_id: {model_run_id}")
     print(f"Model source: {model_source}")
-    
+        
     # Return model details
     return {
         "model_name": model_name,
@@ -82,7 +83,7 @@ def get_production_model_info(**kwargs):
         "model_run_id": model_run_id,
         "model_source": model_source
     }
-
+        
 def define_image_details(**kwargs):
     """Define Docker image tag and full URI."""
     # Get current timestamp for the image tag
@@ -284,81 +285,93 @@ def update_kubernetes_deployment(**kwargs):
 
 def verify_deployment_rollout(**kwargs):
     ti = kwargs['ti']
-    deployment_info = ti.xcom_pull(task_ids='update_kubernetes_deployment')
-    if not deployment_info or 'deployment_name' not in deployment_info:
-        raise AirflowFailException("Missing deployment_name in XCom from update_kubernetes_deployment")
-
-    deployment_name = deployment_info['deployment_name']
-    namespace = "default" # Or your target namespace
-    timeout_seconds = 300
+    deployment_name = env_vars['K8S_DEPLOYMENT_NAME']
+    namespace = "default"
+    max_retries = 10  # Number of times to check for rollout status (e.g., 10 * 30s = 5 minutes)
+    retry_delay_seconds = 30
 
     print(f"Verifying rollout status for deployment '{deployment_name}' in namespace '{namespace}'...")
 
     try:
-        config.load_kube_config() # Load Kubeconfig
-    except Exception as e:
-        # Fallback for debugging, less ideal for prod
+        # Ensure Kubeconfig is loaded (same as in update_kubernetes_deployment)
         try:
-            config.load_kube_config(config_file="/home/airflow/.kube/config")
-        except Exception as e2:
-            raise AirflowFailException(f"Failed to load kubeconfig (default or specific path) for rollout verification. Default err: {str(e)}. Specific path err: {str(e2)}")
+            config.load_kube_config()
+        except Exception as e:
+            print(f"Error loading Kubeconfig: {str(e)}")
+            try:
+                config.load_kube_config(config_file="/home/airflow/.kube/config")
+            except Exception as e2:
+                raise AirflowFailException(f"Failed to load kubeconfig. Default error: {str(e)}. Specific path error: {str(e2)}")
+        
+        api = client.AppsV1Api()
+        core_v1_api = client.CoreV1Api() # For pod logs
 
-    api = client.AppsV1Api()
-    watch = client.Watch()
+        for i in range(max_retries):
+            print(f"Rollout check attempt {i+1}/{max_retries}...")
+            deployment = api.read_namespaced_deployment_status(name=deployment_name, namespace=namespace)
+            status = deployment.status
+            
+            desired_replicas = deployment.spec.replicas if deployment.spec.replicas is not None else 1 # Default to 1 if not set
+            ready_replicas = status.ready_replicas if status.ready_replicas is not None else 0
+            updated_replicas = status.updated_replicas if status.updated_replicas is not None else 0
+            available_replicas = status.available_replicas if status.available_replicas is not None else 0
 
-    print(f"Watching deployment '{deployment_name}' for rollout completion (timeout: {timeout_seconds}s)...")
-    try:
-        for event in watch.stream(
-            api.read_namespaced_deployment_status,
-            name=deployment_name,
-            namespace=namespace,
-            timeout_seconds=timeout_seconds
-        ):
-            deployment_obj = event["object"]
-            status = deployment_obj.status
-            # Generation check ensures we are observing changes related to our update
-            if (status.updated_replicas == deployment_obj.spec.replicas and
-                status.replicas == deployment_obj.spec.replicas and
-                status.available_replicas == deployment_obj.spec.replicas and
-                status.observed_generation >= deployment_obj.metadata.generation):
-                print(f"Deployment '{deployment_name}' rollout successful.")
-                watch.stop()
-                # Minikube service URL fetch - this part remains tricky if minikube CLI isn't on PATH or if not using minikube
-                service_url = "Unavailable (Minikube command not run)"
-                if env_vars.get('K8S_CONTEXT_TYPE', 'minikube') == 'minikube': # Example, you might need better logic
-                    try:
-                        minikube_profile = env_vars.get('MINIKUBE_PROFILE', 'minikube')
-                        service_command_list = ["minikube", f"--profile={minikube_profile}", "-n", namespace, "service", env_vars['K8S_SERVICE_NAME'], "--url"]
-                        print(f"Fetching service URL with command: {' '.join(service_command_list)}")
-                        process = subprocess.run(
-                            service_command_list, 
-                            check=True, 
-                            capture_output=True, 
-                            text=True, 
-                            timeout=60
+            print(f"  Desired: {desired_replicas}, Updated: {updated_replicas}, Ready: {ready_replicas}, Available: {available_replicas}")
+
+            # Check conditions for successful rollout
+            rollout_complete = (
+                status.observed_generation == deployment.metadata.generation and
+                updated_replicas == desired_replicas and
+                available_replicas == desired_replicas and
+                ready_replicas == desired_replicas
+            )
+            
+            if rollout_complete:
+                print(f"Deployment '{deployment_name}' successfully rolled out.")
+                # Optionally: Check service endpoint if applicable after successful rollout
+                return {"rollout_status": "success"}
+
+            # If not complete, fetch and print recent pod logs for debugging
+            # This helps diagnose issues if pods are crashing or not becoming ready
+            print(f"Rollout not yet complete. Fetching pod logs for deployment '{deployment_name}'...")
+            pods = core_v1_api.list_namespaced_pod(
+                namespace=namespace, 
+                label_selector=f"app={deployment.spec.template.metadata.labels.get('app')}" # Assumes a standard 'app' label
+            )
+            for pod_item in pods.items:
+                pod_name = pod_item.metadata.name
+                print(f"  Logs for pod: {pod_name} (status: {pod_item.status.phase})")
+                try:
+                    # Fetch logs for each container in the pod
+                    for container in pod_item.spec.containers:
+                        container_name = container.name
+                        print(f"    Logs for container: {container_name}")
+                        api_response = core_v1_api.read_namespaced_pod_log(
+                            name=pod_name, 
+                            namespace=namespace,
+                            container=container_name,
+                            tail_lines=20 # Get last 20 lines
                         )
-                        service_url = process.stdout.strip()
-                        print(f"Service URL for '{env_vars['K8S_SERVICE_NAME']}': {service_url}")
-                    except FileNotFoundError:
-                        print("Minikube CLI not found. Cannot fetch service URL.")
-                        service_url = "Unavailable (Minikube CLI not found)"
-                    except subprocess.CalledProcessError as e:
-                        print(f"Minikube service command failed: {e.stderr}")
-                        service_url = f"Unavailable (Minikube error: {e.stderr[:100]}...)"
-                    except Exception as e:
-                        print(f"Error fetching Minikube service URL: {str(e)}")
-                        service_url = f"Unavailable (Error: {str(e)[:100]}...)"
-                return {"deployment_name": deployment_name, "rollout_success": True, "service_url": service_url}
-            else:
-                print(f"Deployment '{deployment_name}' status: Updated: {status.updated_replicas}/{deployment_obj.spec.replicas}, Available: {status.available_replicas}/{deployment_obj.spec.replicas}, Generation: {status.observed_generation}/{deployment_obj.metadata.generation}")
-    except client.exceptions.ApiException as e:
-        if e.status == 404:
-            raise AirflowFailException(f"Deployment '{deployment_name}' not found in namespace '{namespace}' during watch.")
-        raise AirflowFailException(f"Kubernetes API error watching deployment rollout: {e.status} - {e.reason} - {e.body}")
-    except Exception as e:
-        raise AirflowFailException(f"Error watching deployment rollout: {str(e)}")
+                        print(api_response)
+                except client.exceptions.ApiException as log_e:
+                    print(f"    Could not retrieve logs for pod {pod_name}: {log_e.reason}")
+                except Exception as log_exc:
+                    print(f"    Unexpected error retrieving logs for pod {pod_name}: {str(log_exc)}")
 
-    raise AirflowFailException(f"Deployment '{deployment_name}' did not rollout successfully within {timeout_seconds} seconds.")
+            if i < max_retries - 1:
+                print(f"Retrying in {retry_delay_seconds} seconds...")
+                time.sleep(retry_delay_seconds) # Use time.sleep(), ensure time is imported
+            else:
+                raise AirflowFailException(f"Deployment '{deployment_name}' failed to roll out after {max_retries} attempts.")
+
+    except client.exceptions.ApiException as e:
+        raise AirflowFailException(f"Kubernetes API Error during rollout verification: {e.status} - {e.reason} - Body: {e.body}")
+    except Exception as e:
+        # If it's an AirflowRetryableException, re-raise it to let Airflow handle the retry
+        if isinstance(e, airflow.exceptions.AirflowRetryableException):
+            raise e
+        # For other exceptions, wrap in AirflowFailException
+        raise AirflowFailException(f"Unexpected error during rollout verification: {str(e)}")
 
 # Task 1: Get production model info from MLflow
 get_production_model_info_task = PythonOperator(

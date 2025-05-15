@@ -179,15 +179,16 @@ def main(args):
     y_val_np = y_val_for_testing.to_numpy()
     
     # Define models and their HPO search spaces
+    # Temporarily restricting to RandomForest for faster feedback cycles
     models_config = {
-        "LogisticRegression": {
-            "search_space": {
-                "C": tune.loguniform(1e-4, 1e2),
-                "penalty": tune.choice(['l1', 'l2'])
-            },
-            "metric": "f1_score", # Metric to optimize for Tune
-            "mode": "max"       # "max" or "min"
-        },
+        # "LogisticRegression": {
+        #     "search_space": {
+        #         "C": tune.loguniform(1e-4, 1e2),
+        #         "penalty": tune.choice(['l1', 'l2'])
+        #     },
+        #     "metric": "f1_score", # Metric to optimize for Tune
+        #     "mode": "max"       # "max" or "min"
+        # },
         "RandomForest": {
             "search_space": {
                 "n_estimators": tune.randint(50, 200),
@@ -198,17 +199,17 @@ def main(args):
              "metric": "f1_score",
              "mode": "max"
         },
-        "XGBoost": {
-            "search_space": {
-                "n_estimators": tune.randint(50, 200),
-                "learning_rate": tune.loguniform(0.01, 0.3),
-                "max_depth": tune.randint(3, 10),
-                "subsample": tune.uniform(0.6, 1.0),
-                "colsample_bytree": tune.uniform(0.6, 1.0)
-            },
-            "metric": "f1_score", # Can also use roc_auc_score
-            "mode": "max"
-        }
+        # "XGBoost": {
+        #     "search_space": {
+        #         "n_estimators": tune.randint(50, 200),
+        #         "learning_rate": tune.loguniform(0.01, 0.3),
+        #         "max_depth": tune.randint(3, 10),
+        #         "subsample": tune.uniform(0.6, 1.0),
+        #         "colsample_bytree": tune.uniform(0.6, 1.0)
+        #     },
+        #     "metric": "f1_score", # Can also use roc_auc_score
+        #     "mode": "max"
+        # }
     }
 
     for model_name, config_dict in models_config.items():

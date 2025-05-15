@@ -3,6 +3,8 @@ version: '3.8'
 networks:
   mlops_network:
     driver: bridge
+  minikube:
+    external: true
 
 services:
   postgres:
@@ -83,18 +85,19 @@ services:
       - ../src:/opt/airflow/src
       - /var/run/docker.sock:/var/run/docker.sock
       - /home/ubuntu/health-predict:/home/ubuntu/health-predict
-      - /home/ubuntu/.kube:/home/airflow/.kube:ro
-      - /home/ubuntu/.minikube:/home/ubuntu/.minikube:ro
+      - /home/ubuntu/.kube/config_flattened:/home/airflow/.kube/config:ro
     environment:
-      AIRFLOW__CORE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@localhost:5432/airflowdb
+      AIRFLOW__CORE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres:5432/airflowdb
       AIRFLOW__CORE__EXECUTOR: LocalExecutor
       PYTHONPATH: /opt/airflow/src:/opt/airflow/scripts
       HOME: /home/airflow
       KUBECONFIG: /home/airflow/.kube/config
       DOCKER_CONFIG: /home/airflow/.docker
-      MLFLOW_SERVER: localhost
+      MLFLOW_SERVER: mlflow
     command: airflow scheduler
-    network_mode: "host"
+    networks:
+      - mlops_network
+      - minikube
 
   mlflow:
     build:

@@ -37,4 +37,8 @@ RUN pip install --no-cache-dir \
     boto3>=1.28.0 \
     apache-airflow-providers-docker>=3.0.0 \
     apache-airflow-providers-cncf-kubernetes>=7.0.0 \
-    kubernetes 
+    kubernetes>=28.1.0 \
+    pytest>=7.0.0
+
+# Copy remaining files and set permissions
+# ... existing code ... 
