@@ -4,8 +4,10 @@ import os
 import copy # For deep copying payloads
 
 # Define the base URL for the API running in Minikube
-# Use the Minikube IP address directly
-API_BASE_URL = "http://192.168.49.2:30887" # Minikube IP with NodePort
+# Use environment variables set by the DAG
+MINIKUBE_IP = os.getenv("MINIKUBE_IP", "127.0.0.1")  # Default to localhost if not set
+K8S_NODE_PORT = os.getenv("K8S_NODE_PORT", "30887")  # Default to 30887 if not set
+API_BASE_URL = f"http://{MINIKUBE_IP}:{K8S_NODE_PORT}"
 HEALTH_URL = f"{API_BASE_URL}/health"
 PREDICT_URL = f"{API_BASE_URL}/predict"
 

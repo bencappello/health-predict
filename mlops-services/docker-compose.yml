@@ -16,67 +16,131 @@ services:
       - POSTGRES_MULTIPLE_DATABASES=airflowdb,mlflowdb
     volumes:
       - pgdata:/var/lib/postgresql/data
-      - ./postgres-init:/docker-entrypoint-initdb.d
+      - ./postgres-init:/docker-entrypoint-initdb.d # For initial DB setup scripts
     ports:
       - "5432:5432"
     networks:
       - mlops_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   airflow-init:
+    image: mlops-services-airflow-init
     build:
       context: .
       dockerfile: Dockerfile.airflow
-    user: "${AIRFLOW_UID:-50000}"
+    container_name: mlops-services-airflow-init-1
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy
     environment:
-      - AIRFLOW__CORE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@postgres:5432/airflowdb
+      - AIRFLOW_UID=50000
+      - AIRFLOW__CORE__FERNET_KEY=${AIRFLOW__CORE__FERNET_KEY}
+      - POSTGRES_USER=airflow
+      - POSTGRES_PASSWORD=airflow
+      - POSTGRES_DB=airflowdb
       - AIRFLOW__CORE__EXECUTOR=LocalExecutor
-      # - AIRFLOW__CORE__LOAD_EXAMPLES=False # Optionally disable example DAGs
-      # - AIRFLOW__WEBSERVER__EXPOSE_CONFIG=True # Optionally expose config in UI
+      - AIRFLOW__CORE__LOAD_EXAMPLES=False
+      - AIRFLOW__CORE__LOGGING_LEVEL=INFO
+      - AIRFLOW__CORE__REMOTE_LOGGING=False
+      - MLFLOW_TRACKING_URI=${MLFLOW_TRACKING_URI}
+      - KUBECONFIG=/home/airflow/.kube/config
+      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=${AIRFLOW__DATABASE__SQL_ALCHEMY_CONN}
+    command: >
+      bash -c "
+        echo 'Waiting for PostgreSQL to be ready...';
+        while ! pg_isready -U $$POSTGRES_USER -h postgres; do
+          echo 'PostgreSQL is not ready yet...';
+          sleep 1;
+        done;
+        echo 'PostgreSQL is ready!';
+        airflow db init && airflow users create --username admin --password admin --firstname Anonymous --lastname User --role Admin --email admin@example.com"
     volumes:
       - ./dags:/opt/airflow/dags
       - ./logs:/opt/airflow/logs
       - ./plugins:/opt/airflow/plugins
       # - ./config:/opt/airflow/config # If you have custom airflow.cfg
-    entrypoint: /bin/bash
-    command: -c "airflow db init && airflow users create --username admin --password admin --firstname Anonymous --lastname User --role Admin --email admin@example.com"
     networks:
       - mlops_network
 
   airflow-webserver:
+    image: mlops-services-airflow-webserver
     build:
       context: .
       dockerfile: Dockerfile.airflow
-    user: "${AIRFLOW_UID:-50000}"
+    container_name: mlops-services-airflow-webserver-1
     restart: always
     depends_on:
-      - postgres
+      airflow-scheduler:
+        condition: service_started
+      postgres:
+        condition: service_healthy
     ports:
       - "8080:8080"
+    environment:
+      - AIRFLOW_UID=50000
+      - AIRFLOW__CORE__FERNET_KEY=${AIRFLOW__CORE__FERNET_KEY}
+      - POSTGRES_USER=airflow
+      - POSTGRES_PASSWORD=airflow
+      - POSTGRES_DB=airflowdb
+      - AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AIRFLOW__CORE__EXECUTOR=LocalExecutor
+      - AIRFLOW__CORE__LOAD_EXAMPLES=False
+      - AIRFLOW__CORE__LOGGING_LEVEL=INFO
+      - AIRFLOW__CORE__REMOTE_LOGGING=False
+      - AIRFLOW__WEBSERVER__EXPOSE_CONFIG=True
+      - AIRFLOW__API__AUTH_BACKEND=airflow.api.auth.backend.basic_auth
+      - MLFLOW_TRACKING_URI=${MLFLOW_TRACKING_URI}
+      - KUBECONFIG=/home/airflow/.kube/config
+      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=${AIRFLOW__DATABASE__SQL_ALCHEMY_CONN}
     volumes:
       - ./dags:/opt/airflow/dags
       - ./logs:/opt/airflow/logs
       - ./plugins:/opt/airflow/plugins
       - ../scripts:/home/jovyan/work/scripts
       - ../src:/home/jovyan/work/src
-    environment:
-      - AIRFLOW__CORE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@postgres:5432/airflowdb
-      - AIRFLOW__CORE__EXECUTOR=LocalExecutor
-      - AIRFLOW__WEBSERVER__WORKERS=2
-      - PYTHONPATH=/home/jovyan/work
     command: airflow webserver
     networks:
       - mlops_network
 
   airflow-scheduler:
+    image: mlops-services-airflow-scheduler
     build:
       context: .
       dockerfile: Dockerfile.airflow
-    user: "${AIRFLOW_UID:-50000}"
+    container_name: mlops-services-airflow-scheduler-1
     restart: always
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy
+    environment:
+      - AIRFLOW_UID=50000
+      - AIRFLOW__CORE__FERNET_KEY=${AIRFLOW__CORE__FERNET_KEY}
+      - POSTGRES_USER=airflow
+      - POSTGRES_PASSWORD=airflow
+      - POSTGRES_DB=airflowdb
+      - AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AIRFLOW__CORE__EXECUTOR=LocalExecutor
+      - AIRFLOW__CORE__LOAD_EXAMPLES=False
+      - AIRFLOW__CORE__LOGGING_LEVEL=INFO
+      - AIRFLOW__CORE__REMOTE_LOGGING=False
+      - AIRFLOW__WEBSERVER__EXPOSE_CONFIG=True
+      - AIRFLOW__API__AUTH_BACKEND=airflow.api.auth.backend.basic_auth
+      - AIRFLOW__SCHEDULER__DAG_DIR_LIST_INTERVAL=10
+      - AIRFLOW__SCHEDULER__MIN_FILE_PROCESS_INTERVAL=0
+      - AIRFLOW__SCHEDULER__SCHEDULER_HEARTBEAT_SEC=5
+      - AIRFLOW__CELERY__BROKER_URL=
+      - AIRFLOW__CELERY__RESULT_BACKEND=
+      - MLFLOW_TRACKING_URI=${MLFLOW_TRACKING_URI}
+      - KUBECONFIG=/home/airflow/.kube/config
+      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=${AIRFLOW__DATABASE__SQL_ALCHEMY_CONN}
     volumes:
       - ./dags:/opt/airflow/dags
       - ./logs:/opt/airflow/logs
@@ -86,14 +150,6 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       - /home/ubuntu/health-predict:/home/ubuntu/health-predict
       - /home/ubuntu/.kube/config_flattened:/home/airflow/.kube/config:ro
-    environment:
-      AIRFLOW__CORE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres:5432/airflowdb
-      AIRFLOW__CORE__EXECUTOR: LocalExecutor
-      PYTHONPATH: /opt/airflow/src:/opt/airflow/scripts
-      HOME: /home/airflow
-      KUBECONFIG: /home/airflow/.kube/config
-      DOCKER_CONFIG: /home/airflow/.docker
-      MLFLOW_SERVER: mlflow
     command: airflow scheduler
     networks:
       - mlops_network
