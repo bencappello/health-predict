@@ -128,24 +128,6 @@ Defines and manages the core MLOps services:
 *   `jupyterlab`: JupyterLab service with necessary DS/ML libraries and project root mounted.
 Services communicate over a shared Docker network.
 
-## 10. Current Status & Next Steps (Summary)
-
-*   **Completed & Implemented:**
-    *   Core AWS infrastructure setup (EC2, S3, ECR via Terraform).
-    *   Dockerized MLOps services (Airflow, MLflow, Postgres, JupyterLab) on EC2.
-    *   Data splitting and S3 storage.
-    *   Feature engineering pipeline (`src/feature_engineering.py`).
-    *   Comprehensive training script (`scripts/train_model.py`) with HPO (Ray Tune) and MLflow integration, including co-location of preprocessor.
-    *   Airflow DAG (`health_predict_training_hpo`) orchestrating training and model promotion to "Production" in MLflow Model Registry.
-    *   FastAPI model serving API (`src/api/main.py`) that loads model/preprocessor from MLflow.
-    *   Containerization of the API (`Dockerfile`) and push to ECR.
-    *   Deployment of the API to a local Kubernetes (Minikube) cluster on EC2, with successful testing.
-    *   Airflow CI/CD DAG (`health_predict_api_deployment`) for automated API deployment, successfully debugged and tested (API test execution within DAG is currently skipped).
-*   **Immediate Next Steps (High-Level from `project_steps.md`):**
-    *   Implement the drift monitoring script (`scripts/monitor_drift.py`) using Evidently AI.
-    *   Develop and test the Airflow DAG (`monitoring_retraining_dag.py`) for the drift detection and automated retraining loop.
-    *   Complete comprehensive project documentation, finalization, and showcase materials (Phase 6).
-
 ## 11. Key Configuration Points & Access URLs
 
 *   **S3 Bucket:** `health-predict-mlops-f9ac6509`
