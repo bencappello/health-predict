@@ -13,8 +13,6 @@ import os
 from kubernetes import client, config, watch
 import time
 import logging
-import shlex
-import requests
 
 # Get environment variables
 env_vars = {
@@ -42,6 +40,10 @@ default_args = {
     'retry_delay': timedelta(minutes=5),
 }
 
+# Define the local port for kubectl port-forward
+# Using a high, less common port to minimize conflicts
+K8S_PF_LOCAL_PORT = 19888
+
 # Define the DAG
 dag = DAG(
     'health_predict_api_deployment',
@@ -50,29 +52,41 @@ dag = DAG(
     schedule_interval=None,  # Set to None for manual triggering
     start_date=days_ago(1),  # Changed from future date to days_ago(1)
     catchup=False,
-    tags=['health-predict', 'deployment', 'k8s'],
+    tags=['health-predict', 'deployment', 'k8s']
 )
 
 def get_production_model_info(**kwargs):
     """Gets the latest production model details from MLflow."""
-    mlflow_tracking_uri = os.getenv("MLFLOW_TRACKING_URI", "http://mlflow:5000") # Use standardized env var
-    if not mlflow_tracking_uri:
-        raise AirflowFailException("MLFLOW_TRACKING_URI environment variable not set.")
+    # Log environment variables first for debugging
+    mlflow_tracking_uri_env = os.getenv("MLFLOW_TRACKING_URI", "http://default-mlflow:5000")
+    aws_account_id_env = os.getenv("AWS_ACCOUNT_ID", "not_set_in_env")
+    ec2_private_ip_env = os.getenv("EC2_PRIVATE_IP", "not_set_in_env")
+    
+    logging.info(f"[get_production_model_info] MLFLOW_TRACKING_URI from os.getenv: {mlflow_tracking_uri_env}")
+    logging.info(f"[get_production_model_info] AWS_ACCOUNT_ID from os.getenv: {aws_account_id_env}")
+    logging.info(f"[get_production_model_info] EC2_PRIVATE_IP from os.getenv: {ec2_private_ip_env}")
+    logging.info(f"[get_production_model_info] env_vars dict K8S_NAMESPACE: {env_vars.get('K8S_NAMESPACE')}")
+    logging.info(f"[get_production_model_info] env_vars dict MLFLOW_TRACKING_URI: {env_vars.get('MLFLOW_TRACKING_URI')}")
 
-    print(f"Connecting to MLflow at: {mlflow_tracking_uri}")
+    mlflow_tracking_uri = env_vars['MLFLOW_TRACKING_URI'] # Use value from env_vars dict as intended
+    if not mlflow_tracking_uri:
+        logging.error("[get_production_model_info] MLFLOW_TRACKING_URI from env_vars dict is missing!")
+        raise AirflowFailException("MLFLOW_TRACKING_URI from env_vars dict is not set.")
+
+    logging.info(f"[get_production_model_info] Connecting to MLflow at: {mlflow_tracking_uri}")
     client = mlflow.tracking.MlflowClient(tracking_uri=mlflow_tracking_uri)
 
     # Diagnostic: List all registered models
-    print("Listing all registered models:")
+    logging.info("[get_production_model_info] Listing all registered models:")
     for rm in client.search_registered_models():
-        print(f"  - {rm.name}")
+        logging.info(f"  - {rm.name}")
         for mv in rm.latest_versions:
-            print(f"    Version: {mv.version}, Stage: {mv.current_stage}, Run ID: {mv.run_id}")
+            logging.info(f"    Version: {mv.version}, Stage: {mv.current_stage}, Run ID: {mv.run_id}")
 
     model_name = env_vars['MLFLOW_PROD_MODEL_NAME']
     model_stage = env_vars['MLFLOW_PROD_MODEL_STAGE']
 
-    print(f"Fetching latest model '{model_name}' from stage '{model_stage}'...")
+    logging.info(f"[get_production_model_info] Fetching latest model '{model_name}' from stage '{model_stage}'...")
     
     # Get the latest version of the model in the specified stage
     latest_versions = client.get_latest_versions(name=model_name, stages=[model_stage])
@@ -85,8 +99,8 @@ def get_production_model_info(**kwargs):
     model_run_id = model_version.run_id
     model_source = model_version.source # This will be like s3://... or runs:/...
     
-    print(f"Found model: {model_name} version {model_version.version}, run_id: {model_run_id}")
-    print(f"Model source: {model_source}")
+    logging.info(f"[get_production_model_info] Found model: {model_name} version {model_version.version}, run_id: {model_run_id}")
+    logging.info(f"[get_production_model_info] Model source: {model_source}")
         
     # Return model details
     return {
@@ -105,7 +119,7 @@ def define_image_details(**kwargs):
     image_tag = f"v2-{current_time}"
     full_image_uri = f"{env_vars['ECR_REPOSITORY']}:{image_tag}"
     
-    print(f"Defined image URI: {full_image_uri}")
+    logging.info(f"[define_image_details] Defined image URI: {full_image_uri}")
     
     return {
         "image_tag": image_tag,
@@ -120,30 +134,30 @@ def create_or_update_k8s_ecr_secret(**kwargs):
     secret_name = "ecr-registry-key"
     namespace = "default"
 
-    print(f"Creating/updating K8s secret '{secret_name}' for ECR registry '{ecr_registry_url}' in namespace '{namespace}'.")
+    logging.info(f"[create_or_update_k8s_ecr_secret] Creating/updating K8s secret '{secret_name}' for ECR registry '{ecr_registry_url}' in namespace '{namespace}'.")
 
     try:
         # Explicitly load Kubernetes configuration
         try:
-            print("Loading Kubernetes configuration...")
+            logging.info("[create_or_update_k8s_ecr_secret] Loading Kubernetes configuration...")
             # Attempt to load Kubeconfig using default mechanisms first
             # (KUBECONFIG env var, then default path ~/.kube/config)
             if os.getenv('KUBECONFIG'):
-                print(f"Attempting to load Kubeconfig from KUBECONFIG env var: {os.getenv('KUBECONFIG')}")
+                logging.info(f"[create_or_update_k8s_ecr_secret] Attempting to load Kubeconfig from KUBECONFIG env var: {os.getenv('KUBECONFIG')}")
                 config.load_kube_config(config_file=os.getenv('KUBECONFIG'))
             else:
-                print("Attempting to load Kubeconfig from default path (~/.kube/config).")
+                logging.info("[create_or_update_k8s_ecr_secret] Attempting to load Kubeconfig from default path (~/.kube/config).")
                 config.load_kube_config()
-            print("Kubernetes configuration loaded successfully.")
+            logging.info("[create_or_update_k8s_ecr_secret] Kubernetes configuration loaded successfully.")
         except config.ConfigException as e_conf:
-            print(f"Kubeconfig loading from default/env var failed (ConfigException): {str(e_conf)}. Trying /home/airflow/.kube/config...")
+            logging.error(f"[create_or_update_k8s_ecr_secret] Kubeconfig loading from default/env var failed (ConfigException): {str(e_conf)}. Trying /home/airflow/.kube/config...")
             try:
                 config.load_kube_config(config_file="/home/airflow/.kube/config")
-                print("Successfully loaded Kubeconfig from /home/airflow/.kube/config")
+                logging.info("[create_or_update_k8s_ecr_secret] Successfully loaded Kubeconfig from /home/airflow/.kube/config")
             except Exception as e_conf_fallback:
-                raise AirflowFailException(f"Failed to load Kubeconfig from default, env var, AND /home/airflow/.kube/config. Last error: {str(e_conf_fallback)}")
+                raise AirflowFailException(f"[create_or_update_k8s_ecr_secret] Failed to load Kubeconfig from default, env var, AND /home/airflow/.kube/config. Last error: {str(e_conf_fallback)}")
         except Exception as e_load_generic:
-            raise AirflowFailException(f"An unexpected error occurred loading Kubeconfig: {str(e_load_generic)}")
+            raise AirflowFailException(f"[create_or_update_k8s_ecr_secret] An unexpected error occurred loading Kubeconfig: {str(e_load_generic)}")
 
         ecr_client = boto3.client("ecr", region_name=aws_region)
         auth_data = ecr_client.get_authorization_token()
@@ -184,20 +198,20 @@ def create_or_update_k8s_ecr_secret(**kwargs):
 
         try:
             kube_api.read_namespaced_secret(name=secret_name, namespace=namespace)
-            print(f"Secret '{secret_name}' already exists. Patching...")
+            logging.info(f"[create_or_update_k8s_ecr_secret] Secret '{secret_name}' already exists. Patching...")
             kube_api.replace_namespaced_secret(name=secret_name, namespace=namespace, body=secret_body)
-            print(f"Secret '{secret_name}' patched successfully.")
+            logging.info(f"[create_or_update_k8s_ecr_secret] Secret '{secret_name}' patched successfully.")
         except client.exceptions.ApiException as e:
             if e.status == 404:
-                print(f"Secret '{secret_name}' does not exist. Creating...")
+                logging.info(f"[create_or_update_k8s_ecr_secret] Secret '{secret_name}' does not exist. Creating...")
                 kube_api.create_namespaced_secret(namespace=namespace, body=secret_body)
-                print(f"Secret '{secret_name}' created successfully.")
+                logging.info(f"[create_or_update_k8s_ecr_secret] Secret '{secret_name}' created successfully.")
             else:
-                raise AirflowFailException(f"Failed to read/create K8s secret '{secret_name}': {str(e)}")
+                raise AirflowFailException(f"[create_or_update_k8s_ecr_secret] Failed to read/create K8s secret '{secret_name}': {str(e)}")
                 
     except Exception as e:
-        print(f"Error creating/updating K8s ECR secret: {str(e)}")
-        raise AirflowFailException(f"Failed to create/update K8s ECR secret: {str(e)}")
+        logging.error(f"[create_or_update_k8s_ecr_secret] Error creating/updating K8s ECR secret: {str(e)}")
+        raise AirflowFailException(f"[create_or_update_k8s_ecr_secret] Failed to create/update K8s ECR secret: {str(e)}")
 
     return {"k8s_ecr_secret_name": secret_name, "status": "success"}
 
@@ -210,18 +224,18 @@ def build_and_push_docker_image(**kwargs):
         raise AirflowFailException("Could not pull image_details from XCom task 'define_image_details'")
     image_uri = image_details['full_image_uri']
     
-    print(f"Building Docker image with tag: {image_uri}")
+    logging.info(f"[build_and_push_docker_image] Building Docker image with tag: {image_uri}")
     
     docker_build_command_list = ["docker", "build", "-t", image_uri, "."]
-    print(f"Executing command list: {docker_build_command_list} in /home/ubuntu/health-predict")
+    logging.info(f"[build_and_push_docker_image] Executing command list: {docker_build_command_list} in /home/ubuntu/health-predict")
     
     try:
-        print(f"Python CWD: {os.getcwd()}")
-        print(f"Python root dir listing: {os.listdir('/')}")
+        logging.info(f"[build_and_push_docker_image] Python CWD: {os.getcwd()}")
+        logging.info(f"[build_and_push_docker_image] Python root dir listing: {os.listdir('/')}")
         try:
-            print(f"Python /home/ubuntu dir listing: {os.listdir('/home/ubuntu')}")
+            logging.info(f"[build_and_push_docker_image] Python /home/ubuntu dir listing: {os.listdir('/home/ubuntu')}")
         except Exception as e:
-            print(f"Error listing /home/ubuntu: {str(e)}")
+            logging.warning(f"[build_and_push_docker_image] Error listing /home/ubuntu: {str(e)}")
 
         # First test if we can access the directory
         process = subprocess.run(
@@ -233,10 +247,10 @@ def build_and_push_docker_image(**kwargs):
             text=True,
             cwd="/home/ubuntu/health-predict"
         )
-        print(f"Directory listing output: {process.stdout}")
+        logging.info(f"[build_and_push_docker_image] Directory listing output: {process.stdout}")
         if process.returncode != 0:
-            print(f"Error listing directory: {process.stderr}")
-            raise AirflowFailException(f"Failed to access directory: {process.stderr}")
+            logging.error(f"[build_and_push_docker_image] Error listing directory: {process.stderr}")
+            raise AirflowFailException(f"[build_and_push_docker_image] Failed to access directory: {process.stderr}")
             
         # Now try to build the image
         process = subprocess.run(
@@ -250,13 +264,13 @@ def build_and_push_docker_image(**kwargs):
         )
         
         if process.returncode != 0:
-            print(f"Error building Docker image: {process.stderr}")
-            raise AirflowFailException(f"Failed to build Docker image: {process.stderr}")
+            logging.error(f"[build_and_push_docker_image] Error building Docker image: {process.stderr}")
+            raise AirflowFailException(f"[build_and_push_docker_image] Failed to build Docker image: {process.stderr}")
         
-        print(f"Docker build output: {process.stdout}")
+        logging.info(f"[build_and_push_docker_image] Docker build output: {process.stdout}")
         
         # Push the Docker image to ECR
-        print(f"Pushing Docker image: {image_uri}")
+        logging.info(f"[build_and_push_docker_image] Pushing Docker image: {image_uri}")
         docker_push_command_list = ["docker", "push", image_uri]
         process = subprocess.run(
             docker_push_command_list,
@@ -269,10 +283,10 @@ def build_and_push_docker_image(**kwargs):
         )
         
         if process.returncode != 0:
-            print(f"Error pushing Docker image: {process.stderr}")
-            raise AirflowFailException(f"Failed to push Docker image: {process.stderr}")
+            logging.error(f"[build_and_push_docker_image] Error pushing Docker image: {process.stderr}")
+            raise AirflowFailException(f"[build_and_push_docker_image] Failed to push Docker image: {process.stderr}")
             
-        print(f"Docker push output: {process.stdout}")
+        logging.info(f"[build_and_push_docker_image] Docker push output: {process.stdout}")
         
         return {
             "image_uri": image_uri,
@@ -280,8 +294,8 @@ def build_and_push_docker_image(**kwargs):
             "push_success": True
         }
     except Exception as e:
-        print(f"Exception during Docker operations: {str(e)}")
-        raise AirflowFailException(f"Docker operations failed: {str(e)}")
+        logging.error(f"[build_and_push_docker_image] Exception during Docker operations: {str(e)}")
+        raise AirflowFailException(f"[build_and_push_docker_image] Docker operations failed: {str(e)}")
 
 def update_kubernetes_deployment(**kwargs):
     ti = kwargs['ti']
@@ -295,45 +309,45 @@ def update_kubernetes_deployment(**kwargs):
     namespace = "default" # Or your target namespace
     k8s_ecr_secret_name = "ecr-registry-key" # Name of the secret created
 
-    print(f"Attempting to update deployment '{deployment_name}' in namespace '{namespace}' to image '{image_uri}'")
+    logging.info(f"[update_kubernetes_deployment] Attempting to update deployment '{deployment_name}' in namespace '{namespace}' to image '{image_uri}'")
 
     try:
-        print("Loading Kubernetes configuration...")
+        logging.info("[update_kubernetes_deployment] Loading Kubernetes configuration...")
         # config.load_incluster_config() # Use this if Airflow itself runs in K8s
         config.load_kube_config() # Assumes Kubeconfig is in default loc (~/.kube/config) or KUBECONFIG env var is set
-        print("Kubernetes configuration loaded.")
+        logging.info("[update_kubernetes_deployment] Kubernetes configuration loaded.")
     except Exception as e:
-        print(f"Error loading Kubeconfig: {str(e)}")
+        logging.error(f"[update_kubernetes_deployment] Error loading Kubeconfig: {str(e)}")
         # Fallback: try specific path if default loading fails (for debugging, less ideal for prod)
         try:
-            print("Attempting to load Kubeconfig from /home/airflow/.kube/config")
+            logging.info("[update_kubernetes_deployment] Attempting to load Kubeconfig from /home/airflow/.kube/config")
             config.load_kube_config(config_file="/home/airflow/.kube/config")
-            print("Successfully loaded Kubeconfig from /home/airflow/.kube/config")
+            logging.info("[update_kubernetes_deployment] Successfully loaded Kubeconfig from /home/airflow/.kube/config")
         except Exception as e2:
-            raise AirflowFailException(f"Failed to load kubeconfig from default and specific path /home/airflow/.kube/config. Default error: {str(e)}. Specific path error: {str(e2)}")
+            raise AirflowFailException(f"[update_kubernetes_deployment] Failed to load kubeconfig from default and specific path /home/airflow/.kube/config. Default error: {str(e)}. Specific path error: {str(e2)}")
 
     api = client.AppsV1Api()
-    print("AppsV1Api client created.")
+    logging.info("[update_kubernetes_deployment] AppsV1Api client created.")
 
     try:
-        print(f"Fetching current deployment '{deployment_name}'...")
+        logging.info(f"[update_kubernetes_deployment] Fetching current deployment '{deployment_name}'...")
         current_deployment = api.read_namespaced_deployment(name=deployment_name, namespace=namespace)
-        print("Current deployment fetched.")
+        logging.info("[update_kubernetes_deployment] Current deployment fetched.")
 
         # Modify the container image
         found_container = False
         for container in current_deployment.spec.template.spec.containers:
             if container.name == container_name:
-                print(f"Updating image for container '{container_name}' to '{image_uri}'.")
+                logging.info(f"[update_kubernetes_deployment] Updating image for container '{container_name}' to '{image_uri}'.")
                 container.image = image_uri
                 found_container = True
                 break
         if not found_container:
-            raise AirflowFailException(f"Container '{container_name}' not found in deployment '{deployment_name}'.")
+            raise AirflowFailException(f"[update_kubernetes_deployment] Container '{container_name}' not found in deployment '{deployment_name}'.")
 
         # Add/Update imagePullSecrets
         current_deployment.spec.template.spec.image_pull_secrets = [client.V1LocalObjectReference(name=k8s_ecr_secret_name)]
-        print(f"Set imagePullSecrets to use '{k8s_ecr_secret_name}'.")
+        logging.info(f"[update_kubernetes_deployment] Set imagePullSecrets to use '{k8s_ecr_secret_name}'.")
 
         # Update environment variables
         # Ensure EC2_PRIVATE_IP is available
@@ -360,20 +374,20 @@ def update_kubernetes_deployment(**kwargs):
                 else:
                     container.env = [env_var_mlflow]
                 updated_env_vars = True
-                print(f"Updated/Set MLFLOW_TRACKING_URI to '{mlflow_tracking_uri_for_pod}' for container '{container_name}'.")
+                logging.info(f"[update_kubernetes_deployment] Updated/Set MLFLOW_TRACKING_URI to '{mlflow_tracking_uri_for_pod}' for container '{container_name}'.")
                 break
         
         if not updated_env_vars:
              # This case should ideally not be reached if found_container was true earlier for image update.
-            raise AirflowFailException(f"Failed to find container '{container_name}' to update env vars, though it was found for image update.")
+            raise AirflowFailException(f"[update_kubernetes_deployment] Failed to find container '{container_name}' to update env vars, though it was found for image update.")
 
-        print(f"Replacing deployment '{deployment_name}' with updated configuration...")
+        logging.info(f"[update_kubernetes_deployment] Replacing deployment '{deployment_name}' with updated configuration...")
         api.replace_namespaced_deployment(name=deployment_name, namespace=namespace, body=current_deployment)
-        print(f"Deployment '{deployment_name}' replaced successfully.")
+        logging.info(f"[update_kubernetes_deployment] Deployment '{deployment_name}' replaced successfully.")
 
     except client.exceptions.ApiException as e:
-        print(f"Kubernetes API Exception: {e.status} - {e.reason} - {e.body}")
-        raise AirflowFailException(f"Failed to update K8s deployment: Status {e.status} - {e.reason} - Body: {e.body}")
+        logging.error(f"[update_kubernetes_deployment] Kubernetes API Exception: {e.status} - {e.reason} - {e.body}")
+        raise AirflowFailException(f"[update_kubernetes_deployment] Failed to update K8s deployment: Status {e.status} - {e.reason} - Body: {e.body}")
     except Exception as e:
         raise AirflowFailException(f"An unexpected error occurred when updating K8s deployment: {str(e)}")
 
@@ -512,107 +526,71 @@ def verify_deployment_rollout(**kwargs):
     logging.info(f"verify_kubernetes_deployment returning: {return_value}")
     return return_value
 
-def construct_test_command(**kwargs):
-    ti = kwargs["ti"]
-    node_port = ti.xcom_pull(task_ids='verify_deployment_rollout', key='k8s_node_port')
-
-    # minikube_ip = env_vars.get('EC2_PRIVATE_IP') # Use the host's private IP
-    # if not minikube_ip:
-    #     raise AirflowFailException("EC2_PRIVATE_IP environment variable is not set in DAG env_vars, cannot construct test command.")
-    minikube_ip = "192.168.49.2" # IP from 'minikube service --url' or 'minikube ip'
-
-    if not node_port:
-        raise AirflowFailException("Could not pull k8s_node_port from XCom task 'verify_deployment_rollout', or it was None.")
+def construct_api_test_command(ti, params, **kwargs):
+    project_root = ti.xcom_pull(task_ids='define_image_details', key='project_root_path')
+    if not project_root:
+        raise ValueError("XCom pull for 'project_root_path' failed.")
     
-    pytest_command_path = "/home/ubuntu/health-predict/tests/api/test_api_endpoints.py"
+    # test_file_relative_path = "tests/api/test_api_endpoints.py" # For actual pytest
+    local_port_val = params.get('local_port_to_use', '19888')
 
-    cmd = (
-        f"MINIKUBE_IP={shlex.quote(minikube_ip)} "
-        f"K8S_NODE_PORT={shlex.quote(str(node_port))} "
-        f"python -m pytest {shlex.quote(pytest_command_path)} -v"
-    )
+    health_url_val = f"http://localhost:{local_port_val}/health"
     
-    print(f"Constructed test command: {cmd}")
-
-    return {"test_command": cmd}
+    # Initial test: curl the health endpoint. Replace with pytest command later.
+    # set -ex: exit on error, print commands
+    # curl -fsSL: fail silently on server errors (no HTML output), show error on client/network error, follow redirects
+    full_command_val = f"set -ex; echo 'Attempting to curl health endpoint via port-forward: {health_url_val}'; curl -fsSL --connect-timeout 10 --max-time 15 {health_url_val}"
+    
+    logging.info(f"Constructed test command for XCom: {full_command_val}")
+    ti.xcom_push(key='api_test_command', value=full_command_val)
 
 def run_api_tests_callable(**kwargs):
     ti = kwargs['ti']
-    command_info = ti.xcom_pull(task_ids='construct_api_test_command')
-    if not command_info or 'test_command' not in command_info:
-        raise AirflowFailException("Could not pull test_command from XCom task 'construct_api_test_command'")
+    logging.info("[run_api_tests_callable] Starting API test execution.")
 
-    test_command = command_info['test_command']
+    api_test_command_str = ti.xcom_pull(task_ids='construct_api_test_command', key='api_test_command')
+    if not api_test_command_str:
+        logging.error("[run_api_tests_callable] Failed to pull 'api_test_command' from XCom.")
+        raise AirflowFailException("Could not retrieve api_test_command from XCom.")
 
-    # print(f"Executing API tests with command: {test_command}")
-
-    # # Diagnostic: Print env vars as seen by this operator
-    # diag_minikube_ip = os.getenv("MINIKUBE_IP_FOR_TEST", "NOT_SET_IN_OPERATOR_ENV") # Check a var we expect to be set by the command string
-    # actual_pytest_minikube_ip = "192.168.49.2" # This is what we hardcoded in construct_test_command
-    # actual_pytest_node_port = ti.xcom_pull(task_ids='verify_deployment_rollout', key='k8s_node_port')
+    logging.info(f"[run_api_tests_callable] Retrieved command from XCom: {api_test_command_str}")
     
-    # print(f"DIAGNOSTIC: MINIKUBE_IP_FOR_TEST in operator env: {diag_minikube_ip}")
-    # print(f"DIAGNOSTIC: Hardcoded Minikube IP for test command: {actual_pytest_minikube_ip}")
-    # print(f"DIAGNOSTIC: Node port from XCom for test command: {actual_pytest_node_port}")
+    # The command from XCom might be a simple string, ensure it's run with shell=True if it contains shell features
+    # or parse it into a list if it's space-separated arguments for shell=False.
+    # Given it's `set -ex; echo ...; curl ...`, shell=True is appropriate.
+    try:
+        logging.info(f"[run_api_tests_callable] Executing test command with shell=True: {api_test_command_str}")
+        # Using a timeout that matches or slightly exceeds the curl command's own timeouts
+        process = subprocess.run(
+            api_test_command_str, 
+            shell=True, 
+            check=False, # We will check returncode manually
+            stdout=subprocess.PIPE, 
+            stderr=subprocess.PIPE, 
+            text=True,
+            timeout=30 # seconds, curl has 10s connect, 15s max time
+        )
+        
+        logging.info(f"[run_api_tests_callable] Test command STDOUT:\n{process.stdout}")
+        logging.info(f"[run_api_tests_callable] Test command STDERR:\n{process.stderr}")
+        logging.info(f"[run_api_tests_callable] Test command return code: {process.returncode}")
 
-    # # Diagnostic: Check for proxy env vars
-    # http_proxy = os.getenv("HTTP_PROXY", "NOT_SET")
-    # https_proxy = os.getenv("HTTPS_PROXY", "NOT_SET")
-    # no_proxy = os.getenv("NO_PROXY", "NOT_SET")
-    # print(f"DIAGNOSTIC: HTTP_PROXY={http_proxy}, HTTPS_PROXY={https_proxy}, NO_PROXY={no_proxy}")
+        if process.returncode != 0:
+            error_message = f"API test command failed with return code {process.returncode}. stderr: {process.stderr}"
+            logging.error(f"[run_api_tests_callable] {error_message}")
+            raise AirflowFailException(error_message)
+        else:
+            # For curl, an additional check for http_code might be useful if not done by curl itself.
+            # The current curl command `curl -fsSL ...` should exit non-zero on server errors.
+            # If `set -e` is part of the command string and shell=True, the shell handles the exit.
+            logging.info("[run_api_tests_callable] API test command executed successfully.")
 
-    # health_url_to_test = f"http://{actual_pytest_minikube_ip}:{actual_pytest_node_port}/health"
-
-    # print(f"DIAGNOSTIC: Attempting direct curl subprocess to {health_url_to_test} from within run_api_tests_callable")
-    # try:
-    #     curl_command = ["curl", "-v", "-s", "-f", health_url_to_test]
-    #     # curl_process = subprocess.run(curl_command, capture_output=True, text=True, timeout=5, check=True)
-    #     # Simplified for now, just check return code
-    #     curl_process = subprocess.run(curl_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=5)
-    #     if curl_process.returncode == 0:
-    #         print(f"DIAGNOSTIC: Direct curl subprocess to {health_url_to_test} SUCCEEDED. Output: {curl_process.stdout[:200]}")
-    #     else:
-    #         print(f"DIAGNOSTIC: Direct curl subprocess to {health_url_to_test} FAILED. Return code: {curl_process.returncode}. Stderr: {curl_process.stderr}")
-    # except subprocess.CalledProcessError as e_curl_called:
-    #     print(f"DIAGNOSTIC: Direct curl subprocess to {health_url_to_test} FAILED (CalledProcessError): {str(e_curl_called)}")
-    # except subprocess.TimeoutExpired as e_curl_timeout:
-    #     print(f"DIAGNOSTIC: Direct curl subprocess to {health_url_to_test} FAILED (Timeout):")
-    # except Exception as e_curl:
-    #     print(f"DIAGNOSTIC: Direct curl subprocess to {health_url_to_test} FAILED (General Exception): {str(e_curl)}")
-
-    # print(f"DIAGNOSTIC: Attempting direct requests.get to {health_url_to_test} from within run_api_tests_callable")
-    # try:
-    #     diag_response = requests.get(health_url_to_test, timeout=5)
-    #     print(f"DIAGNOSTIC: Direct requests.get status: {diag_response.status_code}, response: {diag_response.text[:200]}")
-    # except Exception as e:
-    #     print(f"DIAGNOSTIC: Direct requests.get FAILED: {str(e)}")
-
-    # process = subprocess.run(
-    #     test_command,
-    #     shell=True,
-    #     check=False,
-    #     stdout=subprocess.PIPE,
-    #     stderr=subprocess.PIPE,
-    #     text=True,
-    #     cwd="/home/ubuntu/health-predict"
-    # )
-
-    # if process.returncode == 0:
-    #     print("API tests passed successfully!")
-    #     print(process.stdout)
-    #     return {"tests_passed": True, "status": "success", "output": process.stdout}
-    # else:
-    #     print("API tests failed.")
-    #     print("stdout:")
-    #     print(process.stdout)
-    #     print("stderr:")
-    #     print(process.stderr)
-    #     raise AirflowFailException(f"API tests failed with return code {process.returncode}. Check logs for details.")
-
-    print("Skipping API tests due to persistent connectivity issues from Airflow worker to Minikube NodePort.")
-    print(f"Original test command was: {test_command}")
-    print("Please run tests manually or investigate Airflow worker network sandboxing.")
-    return {"tests_passed": "skipped", "status": "success", "output": "Tests skipped"}
+    except subprocess.TimeoutExpired:
+        logging.error("[run_api_tests_callable] API test command timed out.")
+        raise AirflowFailException("API test command timed out after 30 seconds.")
+    except Exception as e:
+        logging.error(f"[run_api_tests_callable] An unexpected error occurred during test execution: {str(e)}")
+        raise AirflowFailException(f"Unexpected error in run_api_tests_callable: {str(e)}")
 
 # Task 1: Get production model info from MLflow
 get_production_model_info_task = PythonOperator(
@@ -670,17 +648,125 @@ verify_k8s_deployment = PythonOperator(
     dag=dag,
 )
 
-# Task 8: Construct API Test Command
-construct_test_command_task = PythonOperator(
-    task_id='construct_api_test_command',
-    python_callable=construct_test_command,
+# New Task: Start kubectl port-forward
+start_port_forward_task = BashOperator(
+    task_id='start_kubectl_port_forward',
+    bash_command=r"""
+        set -e ;
+        set -o pipefail ;
+        LOG_FILE="/tmp/kubectl_port_forward_{{ti.pid}}_{{params.LOCAL_PORT_PARAM}}.log" ;
+        PID_FILE="/tmp/kubectl_port_forward_{{ti.pid}}_{{params.LOCAL_PORT_PARAM}}.pid" ;
+
+        echo "LOG_FILE will be: $LOG_FILE" ;
+        echo "PID_FILE will be: $PID_FILE" ;
+
+        # Pre-cleanup any stray port-forward on the same local port
+        pkill -f "kubectl port-forward service/{{params.K8S_SERVICE_NAME_PARAM}} {{params.LOCAL_PORT_PARAM}}:{{params.REMOTE_PORT_PARAM}}" || true ;
+        sleep 2 ;
+
+        # Start port-forwarding
+        kubectl -n {{params.K8S_NAMESPACE_PARAM}} port-forward service/{{params.K8S_SERVICE_NAME_PARAM}} {{params.LOCAL_PORT_PARAM}}:{{params.REMOTE_PORT_PARAM}} > $LOG_FILE 2>&1 & echo $! > $PID_FILE ;
+
+        sleep 5 ; # Give it a few seconds to establish or fail
+
+        if grep -q "Forwarding from" $LOG_FILE; then
+          echo "kubectl port-forward started successfully (found 'Forwarding from' in log)."
+          # Additionally, check if the process is still running
+          if ps -p $(cat $PID_FILE) > /dev/null; then
+            echo "Process $(cat $PID_FILE) is running."
+          else
+            echo "Error: kubectl port-forward process $(cat $PID_FILE) is NOT running after start. Check logs."
+            cat $LOG_FILE
+            exit 1
+          fi
+        else
+          echo "Error starting kubectl port-forward. 'Forwarding from' not found in log. Check logs:"
+          cat $LOG_FILE
+          exit 1
+        fi
+    """,
+    params={
+        'K8S_NAMESPACE_PARAM': env_vars['K8S_NAMESPACE'],
+        'K8S_SERVICE_NAME_PARAM': env_vars['K8S_SERVICE_NAME'],
+        'LOCAL_PORT_PARAM': K8S_PF_LOCAL_PORT, # 19888
+        'REMOTE_PORT_PARAM': 80, # Service port, not targetPort
+    },
     dag=dag,
 )
 
-# Task 9: Run API tests
+# Task: Construct API Test Command (now uses localhost via port-forward)
+construct_api_test_command_task = PythonOperator(
+    task_id='construct_api_test_command',
+    python_callable=construct_api_test_command,
+    params={'local_port_to_use': '19888'}, 
+    dag=dag,
+)
+
+# Task to run the API tests (remains the same, expects XCom 'api_test_command')
 run_api_tests_task = PythonOperator(
     task_id='run_api_tests',
     python_callable=run_api_tests_callable,
+    dag=dag,
+    execution_timeout=timedelta(minutes=6)
+)
+
+# Task to stop kubectl port-forward
+stop_port_forward_task = BashOperator(
+    task_id='stop_kubectl_port_forward',
+    bash_command=r"""
+        set -e ;
+        # Using params for consistency and clarity, ti.pid for unique file names per task instance
+        LOG_FILE="/tmp/kubectl_port_forward_{{ti.pid}}_{{params.LOCAL_PORT_PARAM}}.log"
+        PID_FILE="/tmp/kubectl_port_forward_{{ti.pid}}_{{params.LOCAL_PORT_PARAM}}.pid"
+
+        echo "Attempting to stop kubectl port-forward using PID file: $PID_FILE"
+        if [ -f "$PID_FILE" ]; then
+          PID_TO_KILL=$(cat "$PID_FILE")
+          echo "Found PID $PID_TO_KILL in $PID_FILE. Attempting to stop port-forward process."
+          
+          # Check if process exists (useful before kill and for messages)
+          if ps -p "$PID_TO_KILL" > /dev/null; then
+            echo "Process $PID_TO_KILL is running. Sending SIGTERM..."
+            if kill "$PID_TO_KILL"; then
+              echo "Successfully sent SIGTERM to process $PID_TO_KILL."
+              sleep 2 # Wait for graceful shutdown
+              if ps -p "$PID_TO_KILL" > /dev/null; then
+                echo "Process $PID_TO_KILL still alive after SIGTERM. Sending SIGKILL..."
+                kill -9 "$PID_TO_KILL" || echo "SIGKILL to $PID_TO_KILL failed, process might have exited just now."
+              else
+                echo "Process $PID_TO_KILL terminated gracefully after SIGTERM."
+              fi
+            else
+              echo "Failed to send SIGTERM to $PID_TO_KILL. It might have already exited or an error occurred."
+              # As a fallback, check if it's still running, then try pkill
+              if ps -p "$PID_TO_KILL" > /dev/null; then
+                echo "Process $PID_TO_KILL still running after failed SIGTERM. Using pkill for the specific port-forward as a stronger measure."
+                pkill -f "kubectl port-forward service/{{params.K8S_SERVICE_NAME_PARAM}} {{params.LOCAL_PORT_PARAM}}:{{params.REMOTE_PORT_PARAM}}" || echo "pkill command also failed or found no matching process."
+              fi
+            fi
+          else
+            echo "Process with PID $PID_TO_KILL (from $PID_FILE) was not running. Already stopped or PID is stale."
+          fi
+          rm -f "$PID_FILE"
+        else
+          echo "PID file $PID_FILE not found. Assuming port-forward was not started or PID file already cleaned up."
+          echo "Attempting pkill as a general cleanup for the specified port-forward..."
+        fi
+
+        # Fallback: pkill any kubectl port-forward on the specific local port and service,
+        # this acts as a safety net.
+        echo "Running pkill as a fallback/double-check to ensure no stray processes for service {{params.K8S_SERVICE_NAME_PARAM}} on local port {{params.LOCAL_PORT_PARAM}}..."
+        pkill -f "kubectl port-forward service/{{params.K8S_SERVICE_NAME_PARAM}} {{params.LOCAL_PORT_PARAM}}:{{params.REMOTE_PORT_PARAM}}" || echo "pkill fallback found no matching processes or failed (this is often okay)."
+
+        echo "Port-forward cleanup process complete. Deleting log file $LOG_FILE (if it exists)..."
+        rm -f "$LOG_FILE" || true
+    """,
+    params={
+        'K8S_SERVICE_NAME_PARAM': env_vars['K8S_SERVICE_NAME'],
+        'LOCAL_PORT_PARAM': K8S_PF_LOCAL_PORT, # 19888
+        'REMOTE_PORT_PARAM': 80, # Service port, matches start_task
+    },
+    trigger_rule='all_done', # Ensure this runs even if upstream tasks fail
     dag=dag,
 )
 
@@ -692,4 +778,4 @@ build_and_push_image >> create_k8s_ecr_secret_task
 create_k8s_ecr_secret_task >> update_k8s_deployment
 
 update_k8s_deployment >> verify_k8s_deployment >> \
-construct_test_command_task >> run_api_tests_task
+start_port_forward_task >> construct_api_test_command_task >> run_api_tests_task >> stop_port_forward_task

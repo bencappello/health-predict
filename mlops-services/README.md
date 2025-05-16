@@ -19,6 +19,7 @@ The `docker-compose.yml` file orchestrates the following services:
 -   Docker Compose installed.
 -   AWS CLI installed and configured with necessary credentials (if DAGs or scripts interact directly with AWS services outside of what the EC2 instance profile provides).
 -   A `.env` file in the project root (`health-predict/`) containing necessary environment variables (see "Key Environment Variables" section).
+-   **Minikube (Kubernetes):** Ensure Minikube is started (e.g., `minikube start`) before running Airflow DAGs that deploy to or interact with Kubernetes (like `health_predict_api_deployment`).
 
 ## Core Workflows
 

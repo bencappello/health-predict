@@ -9,6 +9,9 @@ RUN apt-get update && \
     docker.io \
     curl \
     unzip \
+    procps \
+    psmisc \
+    util-linux \
     && rm -rf /var/lib/apt/lists/*
 
 # Install AWS CLI
@@ -22,25 +25,38 @@ RUN curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/s
     install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl && \
     rm kubectl
 
-# Add 'airflow' user (which is UID 50000 in base image) to the Docker group.
-RUN usermod -aG docker airflow
+# Ensure the airflow user can access the host Docker socket
+# The GID 998 should match the GID of /var/run/docker.sock on the host system
+RUN DOCKER_SOCKET_GID=998 && \
+    if getent group ${DOCKER_SOCKET_GID} > /dev/null; then \
+        EXISTING_GROUP_NAME=$(getent group ${DOCKER_SOCKET_GID} | cut -d: -f1) && \
+        echo "Adding user airflow to existing group ${EXISTING_GROUP_NAME} (GID ${DOCKER_SOCKET_GID})" && \
+        usermod -aG ${EXISTING_GROUP_NAME} airflow; \
+    else \
+        echo "Creating new group sockdocker with GID ${DOCKER_SOCKET_GID} and adding user airflow" && \
+        groupadd -g ${DOCKER_SOCKET_GID} sockdocker && \
+        usermod -aG sockdocker airflow; \
+    fi
 
-# Install all Python packages (globally, as root)
-RUN pip install --no-cache-dir \
-    mlflow==2.17.2 \
-    pandas>=2.0.0 \
-    scikit-learn==1.3.2 \
-    ray[tune]>=2.9.0 \
-    xgboost>=2.0.0 \
-    boto3>=1.28.0 \
-    apache-airflow-providers-docker>=3.0.0 \
-    apache-airflow-providers-cncf-kubernetes>=7.0.0 \
-    kubernetes>=28.1.0 \
-    hyperopt \
-    pytest>=7.0.0
+# Add 'airflow' user (which is UID 50000 in base image) to the Docker group if it exists.
+# This is for general Docker capabilities if the base image has a 'docker' group.
+RUN if getent group docker > /dev/null; then usermod -aG docker airflow; fi
 
 # Now switch to the airflow user (UID 50000)
 USER airflow
+
+# Install all Python packages as airflow user
+RUN pip install -vvv --no-cache-dir --user mlflow==2.17.2
+RUN pip install --no-cache-dir --user pandas>=2.0.0
+RUN pip install --no-cache-dir --user scikit-learn==1.3.2
+RUN pip install --no-cache-dir --user 'ray[tune]>=2.9.0'
+RUN pip install --no-cache-dir --user xgboost>=2.0.0
+RUN pip install --no-cache-dir --user boto3>=1.28.0
+RUN pip install --no-cache-dir --user apache-airflow-providers-docker>=3.0.0
+RUN pip install --no-cache-dir --user apache-airflow-providers-cncf-kubernetes>=7.0.0
+RUN pip install --no-cache-dir --user kubernetes>=28.1.0
+RUN pip install --no-cache-dir --user hyperopt
+RUN pip install --no-cache-dir --user pytest>=7.0.0
 
 # Entrypoint and CMD are inherited from the base apache/airflow image
 # EXPOSE commands are typically handled by docker-compose 
