@@ -1,6 +1,6 @@
 # Health Predict: End-to-End MLOps System for Patient Readmission Prediction
 
-![MLOps Architecture](https://via.placeholder.com/800x400?text=Health+Predict+MLOps+Architecture)
+<img src="images/readme_hero.png" alt="Diagram" width="500"/>
 
 ## Overview
 
@@ -154,7 +154,7 @@ The project leverages a diverse technology stack:
 2. **MLOps Services Startup**
    ```bash
    cd mlops-services
-   docker compose --env-file ../.env up -d
+   docker compose up -d
    ```
 
 3. **Initial Training**
