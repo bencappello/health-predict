@@ -23,13 +23,18 @@ Health Predict addresses this challenge by leveraging machine learning to predic
 
 The Health Predict system implements a complete MLOps lifecycle on AWS infrastructure, employing cost-effective design choices to demonstrate enterprise-level capabilities while maintaining budget efficiency:
 
-![Health Predict Solution Architecture](images/health_predict_high_level_architecture_v2.png)
-> The Health Predict MLOps architecture enables end-to-end prediction of patient readmission risk:
-> *   **Data Pipeline**: Patient data is ingested into S3 and processed by a pipeline orchestrated by Airflow on EC2.
-> *   **Model Development**: Ray Tune handles distributed model training and HPO, with experiments and models managed by MLflow.
-> *   **Deployment**: Production models are containerized, stored in ECR, and deployed to a Kubernetes (Minikube) cluster.
-> *   **Model Serving**: A FastAPI serves predictions to end-users.
-> *   **Monitoring & Retraining**: Evidently AI monitors for data drift from S3 logs, triggering automated retraining via Airflow to ensure model accuracy.
+## Solution Architecture Overview
+
+![High-Level Architecture](images/health_predict_high_level_architecture_v2.png)
+*Figure 1: Health Predict High-Level MLOps Architecture.*
+
+### Detailed Views
+
+![Training Pipeline](images/training_pipeline.png)
+*Figure 2: Training Pipeline.*
+
+![Deployment Pipeline](images/deployment_pipeline.png)
+*Figure 3: Deployment Pipeline.*
 
 ### Key Components:
 
@@ -76,7 +81,7 @@ The training pipeline leverages distributed computing for efficient model develo
 - **Model Selection**: Automated selection of best model based on F1 score
 - **Model Registry**: Automatic promotion to production in MLflow registry
 
-![Training Pipeline](images/training_pipeline.png)
+![Training Pipeline](training_pipeline.png)
 
 ### Deployment Pipeline
 The deployment pipeline automates the transition from model training to production:
@@ -88,7 +93,7 @@ The deployment pipeline automates the transition from model training to producti
 - **Testing**: Automated API endpoint testing post-deployment
 - **Monitoring**: Setup of monitoring for the newly deployed model
 
-![Deployment Pipeline](images/deployment_pipeline.png)
+![Deployment Pipeline](deployment_pipeline.png)
 
 ### Model Serving API
 
