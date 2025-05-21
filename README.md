@@ -23,48 +23,22 @@ Health Predict addresses this challenge by leveraging machine learning to predic
 
 The Health Predict system implements a complete MLOps lifecycle on AWS infrastructure, employing cost-effective design choices to demonstrate enterprise-level capabilities while maintaining budget efficiency:
 
+The Health Predict MLOps architecture enables end-to-end prediction of patient readmission risk:
+*   **Data Pipeline**: Patient data is ingested into S3 and processed by a pipeline orchestrated by Airflow on EC2.
+*   **Model Development**: Ray Tune handles distributed model training and HPO, with experiments and models managed by MLflow.
+*   **Deployment**: Production models are containerized, stored in ECR, and deployed to a Kubernetes (Minikube) cluster.
+*   **Model Serving**: A FastAPI serves predictions to end-users.
+*   **Monitoring & Retraining**: Evidently AI monitors for data drift from S3 logs, triggering automated retraining via Airflow to ensure model accuracy.
+
 ![Health Predict Solution Architecture](images/health_predict_high_level_architecture_v2.png)
-> The Health Predict MLOps architecture enables end-to-end prediction of patient readmission risk:
-> *   **Data Pipeline**: Patient data is ingested into S3 and processed by a pipeline orchestrated by Airflow on EC2.
-> *   **Model Development**: Ray Tune handles distributed model training and HPO, with experiments and models managed by MLflow.
-> *   **Deployment**: Production models are containerized, stored in ECR, and deployed to a Kubernetes (Minikube) cluster.
-> *   **Model Serving**: A FastAPI serves predictions to end-users.
-> *   **Monitoring & Retraining**: Evidently AI monitors for data drift from S3 logs, triggering automated retraining via Airflow to ensure model accuracy.
-
-### Key Components:
-
-1. **AWS Infrastructure**
-   - EC2 for hosting core MLOps services
-   - S3 for data and artifact storage
-   - ECR for container image registry
-   - Cost-optimized design using containerization on single EC2 instead of managed services
-
-2. **MLOps Platform**
-   - **Data Management**: AWS S3 for raw and processed data storage
-   - **Model Training & HPO**: Ray Tune for distributed hyperparameter optimization
-   - **Experiment Tracking**: MLflow for comprehensive experiment tracking and model registry
-   - **Model Serving**: FastAPI for REST API endpoints, deployed on Kubernetes
-   - **Orchestration**: Apache Airflow for workflow automation
-   - **Monitoring**: Evidently AI for data and concept drift detection
-   - **CI/CD**: Automated build and deployment pipelines
-
-3. **Kubernetes Deployment**
-   - Minikube for local K8s cluster on EC2 (cost-effective approach)
-   - Containerized model serving with auto-scaling capabilities
-   - Rolling deployment strategy for zero-downtime updates
-
-4. **Drift Detection & Retraining**
-   - Automated monitoring for data and concept drift
-   - Time-series simulation of production data for drift detection
-   - Automated retraining when significant drift is detected
 
 ## Technical Implementation
 
 ### Data Pipeline & Feature Engineering
 
-> The integrated Training and Deployment pipeline, orchestrated by Airflow, automates the journey from raw data to a production-ready model:
-> *   **Training Phase**: Raw data from S3 is processed and used by Ray Tune for HPO and training multiple model types. MLflow tracks experiments and registers the best-performing model (based on F1 score) to the "Production" stage.
-> *   **Deployment Phase**: The "Production" model is retrieved from MLflow, packaged into a Docker container with the FastAPI application, pushed to ECR, and then deployed to Kubernetes via a rolling update. Automated tests ensure the new deployment's integrity.
+The integrated Training and Deployment pipeline, orchestrated by Airflow, automates the journey from raw data to a production-ready model:
+*   **Training Phase**: Raw data from S3 is processed and used by Ray Tune for HPO and training multiple model types. MLflow tracks experiments and registers the best-performing model (based on F1 score) to the "Production" stage.
+*   **Deployment Phase**: The "Production" model is retrieved from MLflow, packaged into a Docker container with the FastAPI application, pushed to ECR, and then deployed to Kubernetes via a rolling update. Automated tests ensure the new deployment's integrity.
 
 ### Training Pipeline with Hyperparameter Optimization
 The training pipeline leverages distributed computing for efficient model development:
