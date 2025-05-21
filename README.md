@@ -26,15 +26,12 @@ The Health Predict system implements a complete MLOps lifecycle on AWS infrastru
 ## Solution Architecture Overview
 
 ![High-Level Architecture](images/health_predict_high_level_architecture_v2.png)
-*Figure 1: Health Predict High-Level MLOps Architecture.*
 
 ### Detailed Views
 
 ![Training Pipeline](images/training_pipeline.png)
-*Figure 2: Training Pipeline.*
 
 ![Deployment Pipeline](images/deployment_pipeline.png)
-*Figure 3: Deployment Pipeline.*
 
 ### Key Components:
 
