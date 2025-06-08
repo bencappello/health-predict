@@ -172,149 +172,87 @@ def main(args):
     mlflow.log_artifact(local_preprocessor_path, artifact_path="preprocessor")
     print("Logged preprocessor artifact to MLflow run.")
 
+    # TEMP DEBUG: Sample tiny subset of data for ultra-fast training (under 10 seconds)
+    # TODO: Remove data sampling after DAG validation
+    print("=== TEMP DEBUG: Sampling tiny dataset for speed ===")
+    sample_size = min(500, len(X_train_for_preprocessor_fitting))  # Use max 500 rows
+    sample_indices = np.random.choice(len(X_train_for_preprocessor_fitting), sample_size, replace=False)
+    X_train_sampled = X_train_for_preprocessor_fitting.iloc[sample_indices]
+    y_train_sampled = y_train_for_preprocessor_fitting.iloc[sample_indices]
+    
     # Use preprocess_data to transform X_train and X_val, with fit_preprocessor=False
-    X_train_processed_df = preprocess_data(X_train_for_preprocessor_fitting, preprocessor, fit_preprocessor=False)
-    X_val_processed_df = preprocess_data(X_val_for_testing, preprocessor, fit_preprocessor=False)
+    X_train_processed_df = preprocess_data(X_train_sampled, preprocessor, fit_preprocessor=False)
+    X_val_processed_df = preprocess_data(X_val_for_testing.head(100), preprocessor, fit_preprocessor=False)  # Sample val too
 
     # Convert processed data to numpy for Ray/XGBoost if needed, ensure correct dtypes
     X_train_processed = X_train_processed_df.to_numpy()
     X_val_processed = X_val_processed_df.to_numpy()
-    y_train_np = y_train_for_preprocessor_fitting.to_numpy()
-    y_val_np = y_val_for_testing.to_numpy()
+    y_train_np = y_train_sampled.to_numpy()
+    y_val_np = y_val_for_testing.head(100).to_numpy()
     
-    # Define models and their HPO search spaces
-    # Temporarily restricting to RandomForest for faster feedback cycles
-    models_config = {
-        # "LogisticRegression": {
-        #     "search_space": {
-        #         "C": tune.loguniform(1e-4, 1e2),
-        #         "penalty": tune.choice(['l1', 'l2'])
-        #     },
-        #     "metric": "f1_score", # Metric to optimize for Tune
-        #     "mode": "max"       # "max" or "min"
-        # },
-        "RandomForest": {
-            "search_space": {
-                "n_estimators": tune.randint(50, 200),
-                "max_depth": tune.randint(5, 20),
-                "min_samples_split": tune.randint(2, 10),
-                "min_samples_leaf": tune.randint(1, 5)
-            },
-             "metric": "f1_score",
-             "mode": "max"
-        },
-        # "XGBoost": {
-        #     "search_space": {
-        #         "n_estimators": tune.randint(50, 200),
-        #         "learning_rate": tune.loguniform(0.01, 0.3),
-        #         "max_depth": tune.randint(3, 10),
-        #         "subsample": tune.uniform(0.6, 1.0),
-        #         "colsample_bytree": tune.uniform(0.6, 1.0)
-        #     },
-        #     "metric": "f1_score", # Can also use roc_auc_score
-        #     "mode": "max"
-        # }
-    }
+    # TEMP DEBUG: Skip Ray Tune entirely for ultra-fast training (under 10 seconds)
+    # TODO: Restore Ray Tune HPO after DAG validation
+    print("=== TEMP DEBUG: Skipping Ray Tune, training simple model directly ===")
+    
+    # Use simple fixed hyperparameters for fastest training
+    model_name = "LogisticRegression"
+    simple_hyperparameters = {"C": 1.0, "penalty": "l2"}  # Simple, fast hyperparameters
+    
+    print(f"Training {model_name} with fixed hyperparameters: {simple_hyperparameters}")
 
-    for model_name, config_dict in models_config.items():
-        print(f"\n--- Running HPO for {model_name} ---")
+    # Ensure any previous run is ended before starting 
+    mlflow.end_run() 
+
+    # Train simple model directly without HPO
+    with mlflow.start_run(run_name=f"Best_{model_name}_Model") as final_run:
+        mlflow.log_params(simple_hyperparameters)
+        mlflow.set_tag("model_name", model_name)
+        mlflow.set_tag("best_hpo_model", "False")  # No HPO performed
+        mlflow.set_tag("debug_mode", "True")
         
-        # Configure Tune
-        scheduler = ASHAScheduler(
-            metric=config_dict["metric"],
-            mode=config_dict["mode"],
-            max_t=args.ray_max_epochs_per_trial, # Max iterations/epochs for a trial
-            grace_period=args.ray_grace_period, # Min iterations before stopping
-            reduction_factor=2
+        # Create and train model with minimal configuration
+        final_model = LogisticRegression(
+            solver='liblinear', 
+            class_weight='balanced', 
+            max_iter=10,  # Very few iterations for speed
+            **simple_hyperparameters
         )
         
-        # Using HyperOptSearch for more advanced search, requires hyperopt to be installed
-        # algo = HyperOptSearch(metric=config_dict["metric"], mode=config_dict["mode"])
+        print("Fitting model...")
+        final_model.fit(X_train_processed, y_train_np)
+                
+        # Quick evaluation on validation set
+        y_pred_val_final = final_model.predict(X_val_processed)
+        y_proba_val_final = final_model.predict_proba(X_val_processed)[:, 1] if hasattr(final_model, "predict_proba") else None
+        final_val_metrics = evaluate_model(y_val_np, y_pred_val_final, y_proba_val_final)
+        
+        # Log minimal metrics
+        mlflow.log_metrics({f"val_{k}": v for k,v in final_val_metrics.items()})
+        print(f"Validation metrics: {final_val_metrics}")
 
-        tuner = tune.Tuner(
-            tune.with_parameters(
-                train_model_hpo,
-                X_train=X_train_processed, 
-                y_train=y_train_np,
-                X_val=X_val_processed,
-                y_val=y_val_np,
-                model_name=model_name
-            ),
-            param_space=config_dict["search_space"],
-            tune_config=tune.TuneConfig(
-                num_samples=args.ray_num_samples, # Number of HPO trials
-                scheduler=scheduler,
-                # search_alg=algo, # Uncomment if using HyperOptSearch
-                max_concurrent_trials=1 # Limit concurrency
-            ),
-            run_config=RunConfig( # Correct RunConfig usage
-                name=f"{model_name}_hpo_experiment",
-                storage_path=args.ray_local_dir, # Correct argument
-                log_to_file=True,
-            )
+        # Log the preprocessor artifact used for this model
+        if os.path.exists(local_preprocessor_path):
+            mlflow.log_artifact(local_preprocessor_path, artifact_path="preprocessor")
+            print(f"Logged preprocessor artifact to run {final_run.info.run_id}.")
+
+        # Log the model with minimal example
+        mlflow.sklearn.log_model(
+            sk_model=final_model,
+            artifact_path="model",
+            registered_model_name=f"Best_{model_name}",
+            serialization_format=mlflow.sklearn.SERIALIZATION_FORMAT_CLOUDPICKLE,
+            input_example=X_train_processed_df.iloc[:1],  # Just 1 example for speed
+            pyfunc_predict_fn="predict_proba"
         )
-        
-        results = tuner.fit()
-        best_trial = results.get_best_result(metric=config_dict["metric"], mode=config_dict["mode"])
-        
-        if best_trial and best_trial.config:
-            best_hyperparameters = best_trial.config
-            print(f"Best hyperparameters for {model_name}: {best_hyperparameters}")
-            print(f"Best {config_dict['metric']} for {model_name} (validation): {best_trial.metrics.get(config_dict['metric'])}")
-
-            # Ensure any previous run is ended before starting the final one
-            mlflow.end_run() 
-
-            # Train final best model of this type on full training data and log it
-            with mlflow.start_run(run_name=f"Best_{model_name}_Model") as final_run:
-                mlflow.log_params(best_hyperparameters)
-                mlflow.set_tag("model_name", model_name)
-                mlflow.set_tag("best_hpo_model", "True")
-                mlflow.log_metric(f"best_val_{config_dict['metric']}", best_trial.metrics.get(config_dict['metric'], 0.0)) # log the primary metric
-
-                if model_name == "LogisticRegression":
-                    final_model = LogisticRegression(solver='liblinear', class_weight='balanced', **best_hyperparameters)
-                elif model_name == "RandomForest":
-                    final_model = RandomForestClassifier(class_weight='balanced', **best_hyperparameters)
-                elif model_name == "XGBoost":
-                    final_model = xgb.XGBClassifier(use_label_encoder=False, eval_metric='logloss', **best_hyperparameters)
-                
-                final_model.fit(X_train_processed, y_train_np)
-                
-                # Evaluate on validation set
-                y_pred_val_final = final_model.predict(X_val_processed)
-                y_proba_val_final = final_model.predict_proba(X_val_processed)[:, 1] if hasattr(final_model, "predict_proba") else None
-                final_val_metrics = evaluate_model(y_val_np, y_pred_val_final, y_proba_val_final)
-                mlflow.log_metrics({f"val_{k}": v for k,v in final_val_metrics.items()})
-
-                # Log the preprocessor artifact used for this model
-                if os.path.exists(local_preprocessor_path):
-                    mlflow.log_artifact(local_preprocessor_path, artifact_path="preprocessor")
-                    print(f"Logged preprocessor artifact ({local_preprocessor_path}) to Best_{model_name}_Model run {final_run.info.run_id}.")
-                else:
-                    print(f"Error: Local preprocessor path {local_preprocessor_path} not found. Cannot log preprocessor for Best_{model_name}_Model.")
-
-                # Log the model
-                mlflow.sklearn.log_model(
-                    sk_model=final_model,
-                    artifact_path="model",  # Changed from f"Best_{model_name}_Model"
-                    registered_model_name=f"Best_{model_name}",
-                    serialization_format=mlflow.sklearn.SERIALIZATION_FORMAT_CLOUDPICKLE,
-                    input_example=X_train_processed_df.iloc[:5],
-                    pyfunc_predict_fn="predict_proba"
-                )
-                print(f"Logged best {model_name} model to MLflow.")
-        else:
-            print(f"HPO for {model_name} did not yield a best trial result.")
+        print(f"Logged {model_name} model to MLflow.")
             
     if os.path.exists(local_preprocessor_path): # Clean up local preprocessor file
         os.remove(local_preprocessor_path)
         
-    # Explicitly shutdown Ray
-    ray.shutdown()
-    print("Ray instance shut down.")
+    # TEMP DEBUG: Ray not used in ultra-fast mode
+    # ray.shutdown()  # Commented out since we're not using Ray
         
-    print("\nTraining script finished.")
+    print("\nTraining script finished - ultra-fast mode.")
 
 
 if __name__ == "__main__":
