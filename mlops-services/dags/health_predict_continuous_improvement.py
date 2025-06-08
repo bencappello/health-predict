@@ -57,7 +57,7 @@ env_vars = {
     'MAX_DAYS_SINCE_UPDATE': '30',
     # Deployment Configuration
     'EC2_PRIVATE_IP': '10.0.1.99',
-    'K8S_DEPLOYMENT_NAME': 'health-predict-api',
+    'K8S_DEPLOYMENT_NAME': 'health-predict-api-deployment',
     'K8S_SERVICE_NAME': 'health-predict-api-service',
     'K8S_NAMESPACE': 'default',
     'ECR_REGISTRY': '536474293413.dkr.ecr.us-east-1.amazonaws.com',
@@ -575,7 +575,7 @@ deploy_to_kubernetes = BashOperator(
     echo "Deploying to Kubernetes with image: $FULL_IMAGE_NAME"
     
     # Update deployment with new image
-    kubectl set image deployment/{{ params.k8s_deployment_name }} health-predict-api=$FULL_IMAGE_NAME -n {{ params.k8s_namespace }}
+    kubectl set image deployment/{{ params.k8s_deployment_name }} health-predict-api-container=$FULL_IMAGE_NAME -n {{ params.k8s_namespace }}
     
     echo "Kubernetes deployment updated successfully"
     ''',
