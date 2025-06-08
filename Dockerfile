@@ -2,6 +2,10 @@ FROM python:3.10-slim
 
 WORKDIR /app
 
+# Build arg for model name
+ARG MODEL_NAME=HealthPredictModel
+ENV MODEL_NAME=${MODEL_NAME}
+
 ENV PYTHONUNBUFFERED=1
 # ENV MLFLOW_TRACKING_URI (Set at runtime by Kubernetes is preferred)
 
