@@ -43,7 +43,7 @@ except Exception as e:
 # Matches the structure expected by the /predict endpoint and feature engineering
 # Ensure field names match Pydantic model aliases (e.g., 'race' for 'race')
 VALID_PAYLOAD = {
-    "patient_nbr": 135,
+    "race": "Caucasian",  # Adding race field as it's in the Pydantic model
     "gender": "Female",
     "age": "[70-80)",
     "admission-type-id": 1,
@@ -87,8 +87,6 @@ VALID_PAYLOAD = {
     "metformin-pioglitazone": "No",
     "change": "No",
     "diabetesMed": "No"
-    # Note: Removed 'race' as it wasn't in the missing fields list. Add if needed.
-    # Add other fields if the model expects more than these.
 }
 
 @pytest.fixture(scope="module")
@@ -203,7 +201,7 @@ def test_predict_malformed_json(service_url):
         data=malformed_json_string, 
         headers={'Content-Type': 'application/json'}
     )
-    assert response.status_code == 400 # Bad Request for malformed JSON
+    assert response.status_code == 422 # FastAPI returns 422 for JSON decode errors
 
 # Consider adding more tests for other edge cases or specific feature interactions
 # Example: Test with values that might cause issues in feature engineering
