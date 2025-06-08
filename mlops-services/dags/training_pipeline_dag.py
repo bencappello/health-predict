@@ -2,9 +2,13 @@ from airflow import DAG
 from airflow.operators.bash import BashOperator
 from airflow.operators.python import PythonOperator
 from datetime import datetime, timedelta
+from airflow.exceptions import AirflowFailException
 import mlflow
 import pandas as pd
 import os
+import subprocess
+import time
+import logging
 
 # Define default arguments for the DAG
 default_args = {
@@ -177,6 +181,134 @@ def find_and_register_best_model(**kwargs):
 
     return registered_models_info
 
+# Function to test API before deployment
+def test_api_before_deployment(**kwargs):
+    """Test API locally before triggering deployment"""
+    logging.info("Starting pre-deployment API testing...")
+    
+    # Get the newly registered model info
+    model_info = kwargs['ti'].xcom_pull(task_ids='find_and_register_best_model')
+    if model_info:
+        logging.info(f"Testing with newly registered model: {model_info}")
+    
+    # Use current timestamp for unique container naming
+    container_name = f"api-test-{int(time.time())}"
+    
+    try:
+        logging.info(f"Building test Docker image: {container_name}:test")
+        
+        # Build test image
+        build_result = subprocess.run([
+            "docker", "build", "-t", f"{container_name}:test", 
+            "-f", "Dockerfile", "."
+        ], cwd="/home/ubuntu/health-predict", capture_output=True, text=True, check=False)
+        
+        if build_result.returncode != 0:
+            raise AirflowFailException(f"Docker build failed: {build_result.stderr}")
+        
+        logging.info("Docker image built successfully")
+        
+        # Run container with test MLflow URI pointing to the MLflow service
+        logging.info(f"Starting test container: {container_name}")
+        run_result = subprocess.run([
+            "docker", "run", "-d", "--name", container_name,
+            "--network", "mlops-services_mlops_network",  # Connect to same network as MLflow
+            "-p", "8001:8000",  # Use different port to avoid conflicts
+            "-e", "MLFLOW_TRACKING_URI=http://mlflow:5000",  # Use service name from same network
+            f"{container_name}:test"
+        ], capture_output=True, text=True, check=False)
+        
+        if run_result.returncode != 0:
+            raise AirflowFailException(f"Docker run failed: {run_result.stderr}")
+        
+        logging.info("Test container started, waiting for API to be ready...")
+        
+        # Wait for container to be ready (with timeout)
+        max_attempts = 30
+        for attempt in range(max_attempts):
+            try:
+                # Check if container is still running
+                status_result = subprocess.run([
+                    "docker", "inspect", "--format", "{{.State.Status}}", container_name
+                ], capture_output=True, text=True, check=False)
+                
+                if status_result.returncode == 0 and status_result.stdout.strip() == "running":
+                    # Test if API is responding
+                    health_result = subprocess.run([
+                        "curl", "-f", "http://localhost:8001/health"
+                    ], capture_output=True, text=True, check=False)
+                    
+                    if health_result.returncode == 0:
+                        logging.info("API is responding to health checks")
+                        break
+                else:
+                    logging.warning(f"Container status: {status_result.stdout.strip()}")
+                    
+            except Exception as e:
+                logging.warning(f"Health check attempt {attempt + 1} failed: {e}")
+            
+            if attempt < max_attempts - 1:
+                time.sleep(2)
+        else:
+            # Get container logs for debugging
+            logs_result = subprocess.run([
+                "docker", "logs", container_name
+            ], capture_output=True, text=True, check=False)
+            
+            raise AirflowFailException(f"API failed to become ready after {max_attempts} attempts. Container logs: {logs_result.stdout}\n{logs_result.stderr}")
+        
+        logging.info("Running comprehensive API tests...")
+        
+        # Set environment variables for tests
+        test_env = os.environ.copy()
+        test_env["API_BASE_URL"] = "http://localhost:8001"
+        test_env["MINIKUBE_IP"] = "127.0.0.1"
+        test_env["K8S_NODE_PORT"] = "8001"
+        
+        # Run tests against local container
+        test_result = subprocess.run([
+            "python", "-m", "pytest", 
+            "/home/ubuntu/health-predict/tests/api/test_api_endpoints.py", 
+            "-v", "--tb=short"
+        ], env=test_env, capture_output=True, text=True, check=False)
+        
+        logging.info(f"Test output:\n{test_result.stdout}")
+        if test_result.stderr:
+            logging.warning(f"Test stderr:\n{test_result.stderr}")
+        
+        if test_result.returncode != 0:
+            # Get container logs for debugging
+            logs_result = subprocess.run([
+                "docker", "logs", container_name
+            ], capture_output=True, text=True, check=False)
+            
+            raise AirflowFailException(f"API tests failed (exit code: {test_result.returncode}):\nTest output: {test_result.stdout}\nTest errors: {test_result.stderr}\nContainer logs: {logs_result.stdout}")
+            
+        logging.info("All API tests passed successfully!")
+        
+        return {
+            "test_status": "passed",
+            "container_name": container_name,
+            "model_info": model_info
+        }
+        
+    except Exception as e:
+        logging.error(f"Pre-deployment API testing failed: {str(e)}")
+        raise AirflowFailException(f"Pre-deployment API testing failed: {str(e)}")
+        
+    finally:
+        # Cleanup - always attempt to clean up containers and images
+        logging.info("Cleaning up test containers and images...")
+        
+        # Stop and remove container
+        subprocess.run(["docker", "stop", container_name], capture_output=True, check=False)
+        subprocess.run(["docker", "rm", container_name], capture_output=True, check=False)
+        
+        # Remove test image
+        subprocess.run(["docker", "rmi", f"{container_name}:test"], capture_output=True, check=False)
+        
+        logging.info("Cleanup completed")
+
 # Task 2: Find and register the best model in MLflow
 find_and_register_best_model_task = PythonOperator(
     task_id='find_and_register_best_model',
@@ -188,8 +320,13 @@ find_and_register_best_model_task = PythonOperator(
     dag=dag,
 )
 
-# Define the task dependencies
-run_training_and_hpo >> find_and_register_best_model_task 
+# Task 3: Test API before deployment
+test_api_before_deployment_task = PythonOperator(
+    task_id='test_api_before_deployment',
+    python_callable=test_api_before_deployment,
+    dag=dag,
+    execution_timeout=timedelta(minutes=10),  # Allow sufficient time for testing
+)
 
-# Define the task dependencies for the training task only (since registration is commented out)
-# run_training_and_hpo # This line should be removed or commented out 
+# Define the task dependencies
+run_training_and_hpo >> find_and_register_best_model_task >> test_api_before_deployment_task 
