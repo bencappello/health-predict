@@ -618,7 +618,7 @@ def verify_deployment(**kwargs):
         # Check rollout status using kubectl
         rollout_result = subprocess.run([
             "kubectl", "rollout", "status", f"deployment/{deployment_name}",
-            "-n", namespace, "--timeout=10s"  # Reduced timeout for fast feedback
+            "-n", namespace, "--timeout=60s"  # Increased timeout for rolling updates
         ], capture_output=True, text=True, check=False)
         
         logging.info(f"Rollout status command output: {rollout_result.stdout}")
