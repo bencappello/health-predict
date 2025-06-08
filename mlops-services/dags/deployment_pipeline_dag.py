@@ -399,15 +399,7 @@ def update_kubernetes_deployment(**kwargs):
     }
 
 def verify_deployment_rollout(**kwargs):
-    ti = kwargs['ti']
-    # Kubeconfig path might need to be parameterized or discovered
-    kube_config_path = os.getenv('KUBECONFIG', None)
-    if not kube_config_path:
-        kube_config_path = "~/.kube/config"
-    kube_config_path = os.path.expanduser(kube_config_path)
-
-    logging.info(f"Using kube_config_path: {kube_config_path}")
-
+    """Simplified deployment verification using Kubernetes readiness checks"""
     try:
         if os.getenv('KUBECONFIG'):
             logging.info(f"Loading Kubeconfig from KUBECONFIG env var: {os.getenv('KUBECONFIG')}")
@@ -431,10 +423,8 @@ def verify_deployment_rollout(**kwargs):
     namespace = "default"
 
     K8S_DEPLOYMENT_NAME = env_vars['K8S_DEPLOYMENT_NAME']
-    K8S_SERVICE_NAME = env_vars['K8S_SERVICE_NAME']
 
     logging.info(f"Verifying rollout status for deployment '{K8S_DEPLOYMENT_NAME}' in namespace '{namespace}'...")
-    return_value = {'rollout_status': 'failed', 'k8s_node_port': None}
 
     for i in range(1, 11):  # Poll for up to 5 minutes (10 attempts * 30 seconds interval)
         logging.info(f"Rollout check attempt {i}/10...")
@@ -454,37 +444,47 @@ def verify_deployment_rollout(**kwargs):
                desired_replicas == ready_replicas and \
                desired_replicas == available_replicas and \
                ready_replicas > 0:
-                logging.info(f"Deployment '{K8S_DEPLOYMENT_NAME}' successfully rolled out, fetching NodePort …")
+                
+                logging.info(f"Deployment '{K8S_DEPLOYMENT_NAME}' successfully rolled out!")
+                
+                # Verify pod health by checking readiness probes
+                healthy_pods = 0
                 try:
-                    svc = core_v1.read_namespaced_service(
-                        name=K8S_SERVICE_NAME, namespace=namespace
+                    pods = core_v1.list_namespaced_pod(
+                        namespace=namespace, 
+                        label_selector="app=health-predict-api"
                     )
-                    node_port = svc.spec.ports[0].node_port
-                    if not node_port: # Check if node_port is None or empty
-                        logging.error(f"Service '{K8S_SERVICE_NAME}' has no nodePort defined on its first port or it is None.")
-                        # This will be caught by the outer Exception and lead to AirflowFailException
-                        raise ValueError(f"Service '{K8S_SERVICE_NAME}' has no nodePort yet or it's not defined.")
-
-                    # **Always push – even if someone changes key later**
-                    ti.xcom_push(key="k8s_node_port", value=str(node_port))
-                    return_value.update(
-                        rollout_status="success", k8s_node_port=str(node_port)
-                    )
-                    logging.info(
-                        f"Pushed k8s_node_port={node_port} to XCom for this run and updated return value."
-                    )
-                except Exception as err: # Catches ValueError and client.ApiException from NodePort fetch
-                    logging.error(f"Could not obtain NodePort for service '{K8S_SERVICE_NAME}': {err}")
-                    # Even if deployment is out, failure to get NodePort is critical
-                    raise AirflowFailException(
-                        f"Roll-out OK for '{K8S_DEPLOYMENT_NAME}' but NodePort for '{K8S_SERVICE_NAME}' missing or fetch failed – aborting task. Error: {err}"
-                    )
-                break # Exit loop on successful rollout and NodePort fetch (or critical failure in fetch)
+                    
+                    for pod in pods.items:
+                        if pod.status.phase == "Running":
+                            # Check readiness condition
+                            for condition in pod.status.conditions or []:
+                                if condition.type == "Ready" and condition.status == "True":
+                                    healthy_pods += 1
+                                    logging.info(f"  Pod {pod.metadata.name} is healthy and ready")
+                                    break
+                    
+                    if healthy_pods == 0:
+                        logging.warning("No healthy pods found despite successful rollout status")
+                        continue  # Continue polling
+                    
+                    logging.info(f"Deployment verification passed: {healthy_pods} healthy pods running")
+                    return {
+                        "rollout_status": "success",
+                        "healthy_pods": healthy_pods,
+                        "deployment_name": K8S_DEPLOYMENT_NAME
+                    }
+                    
+                except Exception as pod_check_error:
+                    logging.error(f"Error checking pod health: {pod_check_error}")
+                    continue  # Continue polling
+                
+                break  # Exit loop on successful verification
             else:
                 # Log pod statuses if rollout is not yet complete
                 try:
                     pods = core_v1.list_namespaced_pod(
-                        namespace=namespace, label_selector=f"app={deployment.spec.template.metadata.labels.get('app')}"
+                        namespace=namespace, label_selector="app=health-predict-api"
                     )
                     if not pods.items:
                         logging.info("  No pods found matching the deployment's selector yet.")
@@ -500,97 +500,75 @@ def verify_deployment_rollout(**kwargs):
                 except Exception as e_pod_log:
                     logging.warning(f"Could not fetch detailed pod statuses: {str(e_pod_log)}")
 
-        except client.ApiException as e: # Handles errors from read_namespaced_deployment
+        except client.ApiException as e:
             logging.error(f"Kubernetes API Exception during rollout check: {e.status} - {e.reason} - {e.body}")
             # Continue to next attempt if it's an API error, might be transient
-        except Exception as e_main_loop: # Catch any other unexpected error in this attempt's try block
+        except Exception as e_main_loop:
             logging.error(f"Unexpected error during this rollout check attempt: {str(e_main_loop)}")
-            # It's safer to fail the task if an unexpected error occurs in the loop.
-            # This specific exception might be AirflowFailException from NodePort fetch.
-            # If so, it will propagate up. Otherwise, wrap it.
             if not isinstance(e_main_loop, AirflowFailException):
                 raise AirflowFailException(f"Unexpected error in rollout check attempt: {e_main_loop}")
             else:
-                raise # Re-raise if it's already an AirflowFailException
+                raise
 
-        if i < 10: # If not the last attempt and we haven't broken out due to success/critical failure
+        if i < 10:
             logging.info("Retrying rollout check in 30 seconds...")
             time.sleep(30)
     
-    # After the loop, check the final status
-    if return_value["rollout_status"] != "success":
-        logging.error(f"Deployment '{K8S_DEPLOYMENT_NAME}' failed to roll out or NodePort could not be obtained after {i} attempts. Final status: {return_value['rollout_status']}")
-        # This will be the case if the loop finishes without success, or an earlier AirflowFailException wasn't caught by this logic
-        raise AirflowFailException(f"Deployment failed to roll out in time or NodePort acquisition failed. Final overall status: {return_value['rollout_status']}")
+    # If we get here, the deployment failed
+    logging.error(f"Deployment '{K8S_DEPLOYMENT_NAME}' failed to roll out after 10 attempts")
+    raise AirflowFailException(f"Deployment failed to roll out successfully within the timeout period")
 
-    logging.info(f"verify_kubernetes_deployment returning: {return_value}")
-    return return_value
+# Removed complex API testing functions - now handled in training DAG pre-deployment
 
-def construct_api_test_command(ti, params, **kwargs):
-    project_root = ti.xcom_pull(task_ids='define_image_details', key='project_root_path')
-    if not project_root:
-        raise ValueError("XCom pull for 'project_root_path' failed.")
-    
-    # test_file_relative_path = "tests/api/test_api_endpoints.py" # For actual pytest
-    local_port_val = params.get('local_port_to_use', '19888')
-
-    health_url_val = f"http://localhost:{local_port_val}/health"
-    
-    # Initial test: curl the health endpoint. Replace with pytest command later.
-    # set -ex: exit on error, print commands
-    # curl -fsSL: fail silently on server errors (no HTML output), show error on client/network error, follow redirects
-    full_command_val = f"set -ex; echo 'Attempting to curl health endpoint via port-forward: {health_url_val}'; curl -fsSL --connect-timeout 10 --max-time 15 {health_url_val}"
-    
-    logging.info(f"Constructed test command for XCom: {full_command_val}")
-    ti.xcom_push(key='api_test_command', value=full_command_val)
-
-def run_api_tests_callable(**kwargs):
-    ti = kwargs['ti']
-    logging.info("[run_api_tests_callable] Starting API test execution.")
-
-    api_test_command_str = ti.xcom_pull(task_ids='construct_api_test_command', key='api_test_command')
-    if not api_test_command_str:
-        logging.error("[run_api_tests_callable] Failed to pull 'api_test_command' from XCom.")
-        raise AirflowFailException("Could not retrieve api_test_command from XCom.")
-
-    logging.info(f"[run_api_tests_callable] Retrieved command from XCom: {api_test_command_str}")
-    
-    # The command from XCom might be a simple string, ensure it's run with shell=True if it contains shell features
-    # or parse it into a list if it's space-separated arguments for shell=False.
-    # Given it's `set -ex; echo ...; curl ...`, shell=True is appropriate.
+def post_deployment_health_check(**kwargs):
+    """Simple post-deployment health check using Kubernetes service"""
     try:
-        logging.info(f"[run_api_tests_callable] Executing test command with shell=True: {api_test_command_str}")
-        # Using a timeout that matches or slightly exceeds the curl command's own timeouts
-        process = subprocess.run(
-            api_test_command_str, 
-            shell=True, 
-            check=False, # We will check returncode manually
-            stdout=subprocess.PIPE, 
-            stderr=subprocess.PIPE, 
-            text=True,
-            timeout=30 # seconds, curl has 10s connect, 15s max time
+        if os.getenv('KUBECONFIG'):
+            config.load_kube_config(config_file=os.getenv('KUBECONFIG'))
+        else:
+            config.load_kube_config()
+        logging.info("Kubernetes configuration loaded for health check.")
+    except Exception as e:
+        raise AirflowFailException(f"Failed to load kubeconfig for health check: {str(e)}")
+
+    core_v1 = client.CoreV1Api()
+    namespace = "default"
+    
+    logging.info("Performing basic health check on deployed API...")
+    
+    # Check if pods are healthy
+    try:
+        pods = core_v1.list_namespaced_pod(
+            namespace=namespace, 
+            label_selector="app=health-predict-api"
         )
         
-        logging.info(f"[run_api_tests_callable] Test command STDOUT:\n{process.stdout}")
-        logging.info(f"[run_api_tests_callable] Test command STDERR:\n{process.stderr}")
-        logging.info(f"[run_api_tests_callable] Test command return code: {process.returncode}")
-
-        if process.returncode != 0:
-            error_message = f"API test command failed with return code {process.returncode}. stderr: {process.stderr}"
-            logging.error(f"[run_api_tests_callable] {error_message}")
-            raise AirflowFailException(error_message)
-        else:
-            # For curl, an additional check for http_code might be useful if not done by curl itself.
-            # The current curl command `curl -fsSL ...` should exit non-zero on server errors.
-            # If `set -e` is part of the command string and shell=True, the shell handles the exit.
-            logging.info("[run_api_tests_callable] API test command executed successfully.")
-
-    except subprocess.TimeoutExpired:
-        logging.error("[run_api_tests_callable] API test command timed out.")
-        raise AirflowFailException("API test command timed out after 30 seconds.")
+        if not pods.items:
+            raise AirflowFailException("No pods found with label app=health-predict-api")
+        
+        healthy_count = 0
+        for pod in pods.items:
+            if pod.status.phase == "Running":
+                for condition in pod.status.conditions or []:
+                    if condition.type == "Ready" and condition.status == "True":
+                        healthy_count += 1
+                        logging.info(f"Pod {pod.metadata.name} is healthy")
+                        break
+        
+        if healthy_count == 0:
+            raise AirflowFailException("No healthy pods found")
+        
+        logging.info(f"Health check passed: {healthy_count} healthy pod(s) running")
+        
+        return {
+            "health_status": "healthy",
+            "healthy_pods": healthy_count,
+            "total_pods": len(pods.items)
+        }
+        
     except Exception as e:
-        logging.error(f"[run_api_tests_callable] An unexpected error occurred during test execution: {str(e)}")
-        raise AirflowFailException(f"Unexpected error in run_api_tests_callable: {str(e)}")
+        logging.error(f"Health check failed: {str(e)}")
+        raise AirflowFailException(f"Post-deployment health check failed: {str(e)}")
 
 # Task 1: Get production model info from MLflow
 get_production_model_info_task = PythonOperator(
@@ -641,141 +619,25 @@ update_k8s_deployment = PythonOperator(
     dag=dag,
 )
 
-# Task 6: Verify deployment rollout (Now uses Python K8s client)
+# Task 6: Verify deployment rollout with simplified health checks
 verify_k8s_deployment = PythonOperator(
     task_id='verify_deployment_rollout',
     python_callable=verify_deployment_rollout,
     dag=dag,
 )
 
-# New Task: Start kubectl port-forward
-start_port_forward_task = BashOperator(
-    task_id='start_kubectl_port_forward',
-    bash_command=r"""
-        set -e ;
-        set -o pipefail ;
-        LOG_FILE="/tmp/kubectl_port_forward_{{ti.pid}}_{{params.LOCAL_PORT_PARAM}}.log" ;
-        PID_FILE="/tmp/kubectl_port_forward_{{ti.pid}}_{{params.LOCAL_PORT_PARAM}}.pid" ;
-
-        echo "LOG_FILE will be: $LOG_FILE" ;
-        echo "PID_FILE will be: $PID_FILE" ;
-
-        # Pre-cleanup any stray port-forward on the same local port
-        pkill -f "kubectl port-forward service/{{params.K8S_SERVICE_NAME_PARAM}} {{params.LOCAL_PORT_PARAM}}:{{params.REMOTE_PORT_PARAM}}" || true ;
-        sleep 2 ;
-
-        # Start port-forwarding
-        kubectl -n {{params.K8S_NAMESPACE_PARAM}} port-forward service/{{params.K8S_SERVICE_NAME_PARAM}} {{params.LOCAL_PORT_PARAM}}:{{params.REMOTE_PORT_PARAM}} > $LOG_FILE 2>&1 & echo $! > $PID_FILE ;
-
-        sleep 5 ; # Give it a few seconds to establish or fail
-
-        if grep -q "Forwarding from" $LOG_FILE; then
-          echo "kubectl port-forward started successfully (found 'Forwarding from' in log)."
-          # Additionally, check if the process is still running
-          if ps -p $(cat $PID_FILE) > /dev/null; then
-            echo "Process $(cat $PID_FILE) is running."
-          else
-            echo "Error: kubectl port-forward process $(cat $PID_FILE) is NOT running after start. Check logs."
-            cat $LOG_FILE
-            exit 1
-          fi
-        else
-          echo "Error starting kubectl port-forward. 'Forwarding from' not found in log. Check logs:"
-          cat $LOG_FILE
-          exit 1
-        fi
-    """,
-    params={
-        'K8S_NAMESPACE_PARAM': env_vars['K8S_NAMESPACE'],
-        'K8S_SERVICE_NAME_PARAM': env_vars['K8S_SERVICE_NAME'],
-        'LOCAL_PORT_PARAM': K8S_PF_LOCAL_PORT, # 19888
-        'REMOTE_PORT_PARAM': 80, # Service port, not targetPort
-    },
+# Task 7: Post-deployment health check
+post_deployment_health_check_task = PythonOperator(
+    task_id='post_deployment_health_check',
+    python_callable=post_deployment_health_check,
     dag=dag,
 )
 
-# Task: Construct API Test Command (now uses localhost via port-forward)
-construct_api_test_command_task = PythonOperator(
-    task_id='construct_api_test_command',
-    python_callable=construct_api_test_command,
-    params={'local_port_to_use': '19888'}, 
-    dag=dag,
-)
-
-# Task to run the API tests (remains the same, expects XCom 'api_test_command')
-run_api_tests_task = PythonOperator(
-    task_id='run_api_tests',
-    python_callable=run_api_tests_callable,
-    dag=dag,
-    execution_timeout=timedelta(minutes=6)
-)
-
-# Task to stop kubectl port-forward
-stop_port_forward_task = BashOperator(
-    task_id='stop_kubectl_port_forward',
-    bash_command=r"""
-        set -e ;
-        # Using params for consistency and clarity, ti.pid for unique file names per task instance
-        LOG_FILE="/tmp/kubectl_port_forward_{{ti.pid}}_{{params.LOCAL_PORT_PARAM}}.log"
-        PID_FILE="/tmp/kubectl_port_forward_{{ti.pid}}_{{params.LOCAL_PORT_PARAM}}.pid"
-
-        echo "Attempting to stop kubectl port-forward using PID file: $PID_FILE"
-        if [ -f "$PID_FILE" ]; then
-          PID_TO_KILL=$(cat "$PID_FILE")
-          echo "Found PID $PID_TO_KILL in $PID_FILE. Attempting to stop port-forward process."
-          
-          # Check if process exists (useful before kill and for messages)
-          if ps -p "$PID_TO_KILL" > /dev/null; then
-            echo "Process $PID_TO_KILL is running. Sending SIGTERM..."
-            if kill "$PID_TO_KILL"; then
-              echo "Successfully sent SIGTERM to process $PID_TO_KILL."
-              sleep 2 # Wait for graceful shutdown
-              if ps -p "$PID_TO_KILL" > /dev/null; then
-                echo "Process $PID_TO_KILL still alive after SIGTERM. Sending SIGKILL..."
-                kill -9 "$PID_TO_KILL" || echo "SIGKILL to $PID_TO_KILL failed, process might have exited just now."
-              else
-                echo "Process $PID_TO_KILL terminated gracefully after SIGTERM."
-              fi
-            else
-              echo "Failed to send SIGTERM to $PID_TO_KILL. It might have already exited or an error occurred."
-              # As a fallback, check if it's still running, then try pkill
-              if ps -p "$PID_TO_KILL" > /dev/null; then
-                echo "Process $PID_TO_KILL still running after failed SIGTERM. Using pkill for the specific port-forward as a stronger measure."
-                pkill -f "kubectl port-forward service/{{params.K8S_SERVICE_NAME_PARAM}} {{params.LOCAL_PORT_PARAM}}:{{params.REMOTE_PORT_PARAM}}" || echo "pkill command also failed or found no matching process."
-              fi
-            fi
-          else
-            echo "Process with PID $PID_TO_KILL (from $PID_FILE) was not running. Already stopped or PID is stale."
-          fi
-          rm -f "$PID_FILE"
-        else
-          echo "PID file $PID_FILE not found. Assuming port-forward was not started or PID file already cleaned up."
-          echo "Attempting pkill as a general cleanup for the specified port-forward..."
-        fi
-
-        # Fallback: pkill any kubectl port-forward on the specific local port and service,
-        # this acts as a safety net.
-        echo "Running pkill as a fallback/double-check to ensure no stray processes for service {{params.K8S_SERVICE_NAME_PARAM}} on local port {{params.LOCAL_PORT_PARAM}}..."
-        pkill -f "kubectl port-forward service/{{params.K8S_SERVICE_NAME_PARAM}} {{params.LOCAL_PORT_PARAM}}:{{params.REMOTE_PORT_PARAM}}" || echo "pkill fallback found no matching processes or failed (this is often okay)."
-
-        echo "Port-forward cleanup process complete. Deleting log file $LOG_FILE (if it exists)..."
-        rm -f "$LOG_FILE" || true
-    """,
-    params={
-        'K8S_SERVICE_NAME_PARAM': env_vars['K8S_SERVICE_NAME'],
-        'LOCAL_PORT_PARAM': K8S_PF_LOCAL_PORT, # 19888
-        'REMOTE_PORT_PARAM': 80, # Service port, matches start_task
-    },
-    trigger_rule='all_done', # Ensure this runs even if upstream tasks fail
-    dag=dag,
-)
-
-# Define task dependencies
+# Define simplified task dependencies
 get_production_model_info_task >> define_image_details_task >> ecr_login_task
 
 ecr_login_task >> build_and_push_image
 build_and_push_image >> create_k8s_ecr_secret_task 
 create_k8s_ecr_secret_task >> update_k8s_deployment
 
-update_k8s_deployment >> verify_k8s_deployment >> \
-start_port_forward_task >> construct_api_test_command_task >> run_api_tests_task >> stop_port_forward_task
+update_k8s_deployment >> verify_k8s_deployment >> post_deployment_health_check_task
