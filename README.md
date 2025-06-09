@@ -124,23 +124,49 @@ The project leverages a diverse technology stack:
    terraform apply
    ```
 
-2. **MLOps Services Startup**
+2. **🚀 MLOps Services Startup (Automated)**
    ```bash
-   cd mlops-services
-   docker compose up -d
+   # One command to start everything with health checks
+   ./scripts/start-mlops-services.sh
    ```
+   This automated script:
+   - ✅ Checks all prerequisites 
+   - ✅ Starts Docker services with proper sequencing
+   - ✅ Automatically starts and verifies Minikube
+   - ✅ Resolves network conflicts
+   - ✅ Provides comprehensive health checks
+   - ✅ Shows all service URLs when ready
 
 3. **Initial Training**
-   - Access Airflow UI at http://<EC2_PUBLIC_IP>:8080
+   - Access Airflow UI at http://localhost:8080 (admin/admin)
    - Trigger the `health_predict_training_hpo` DAG
 
 4. **API Deployment**
-   - Trigger the `health_predict_api_deployment` DAG
-   - Access the API at http://<EC2_PUBLIC_IP>:<NODE_PORT>
+   - Trigger the `health_predict_continuous_improvement` DAG
+   - Access the API via the Kubernetes service URL shown by the startup script
 
 5. **Monitoring & Retraining**
-   - Trigger the `monitoring_retraining_dag` DAG
-   - View drift metrics in MLflow UI at http://<EC2_PUBLIC_IP>:5000
+   - The continuous improvement DAG handles automated retraining
+   - View drift metrics in MLflow UI at http://localhost:5000
+
+### 🛠️ Service Management Commands
+
+```bash
+# Start all services (most common)
+./scripts/start-mlops-services.sh
+
+# Rebuild and start (after code changes)
+./scripts/start-mlops-services.sh --rebuild
+
+# Reset everything (fresh start)
+./scripts/start-mlops-services.sh --reset
+
+# Stop all services
+./scripts/stop-mlops-services.sh
+
+# Stop but keep Minikube running
+./scripts/stop-mlops-services.sh --keep-minikube
+```
 
 ## Future Enhancements
 
