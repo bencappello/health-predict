@@ -23,7 +23,37 @@ The `docker-compose.yml` file orchestrates the following services:
 
 ## Core Workflows
 
-### Starting Services
+### 🚀 Automated Service Management (Recommended)
+
+**NEW: Use the automated startup script for the most reliable experience:**
+
+```bash
+# Start all services (Docker + Minikube) with health checks
+./scripts/start-mlops-services.sh
+
+# Rebuild Docker images and start services
+./scripts/start-mlops-services.sh --rebuild
+
+# Reset all services (removes volumes - WARNING: deletes data)
+./scripts/start-mlops-services.sh --reset
+
+# Stop all services
+./scripts/stop-mlops-services.sh
+
+# Stop services but keep Minikube running
+./scripts/stop-mlops-services.sh --keep-minikube
+```
+
+**The automated script provides:**
+- ✅ Prerequisite checking (Docker, kubectl, minikube, etc.)
+- ✅ Automatic Minikube startup and health verification
+- ✅ Network conflict resolution
+- ✅ Service health checks with retries
+- ✅ Comprehensive status reporting
+- ✅ Clear service URLs and next steps
+
+### Manual Service Management (Advanced Users)
+
 From the `health-predict/mlops-services/` directory (or specifying the compose file path):
 ```bash
 # Ensure you are in health-predict/mlops-services/ or adjust paths accordingly
@@ -41,6 +71,13 @@ docker compose --env-file ../.env down
 To remove volumes (e.g., to reset databases - **use with caution**):
 ```bash
 docker compose --env-file ../.env down -v
+```
+
+**⚠️ Important for Manual Management:**
+You must also manually start Minikube before running deployment DAGs:
+```bash
+minikube start --driver=docker
+kubectl apply -f ../k8s/  # Apply Kubernetes manifests
 ```
 
 ### Accessing UIs
