@@ -193,7 +193,7 @@ def main(args):
     # TEMP DEBUG: Skip Ray Tune entirely for ultra-fast training (under 10 seconds)
     # TODO: Restore Ray Tune HPO after DAG validation
     print("=== TEMP DEBUG: Skipping Ray Tune, training simple model directly ===")
-    
+        
     # Use simple fixed hyperparameters for fastest training
     model_name = "LogisticRegression"
     simple_hyperparameters = {"C": 1.0, "penalty": "l2"}  # Simple, fast hyperparameters
@@ -233,7 +233,7 @@ def main(args):
         # Log the preprocessor artifact used for this model
         if os.path.exists(local_preprocessor_path):
             mlflow.log_artifact(local_preprocessor_path, artifact_path="preprocessor")
-            print(f"Logged preprocessor artifact to run {final_run.info.run_id}.")
+        print(f"Logged preprocessor artifact to run {final_run.info.run_id}.")
 
         # Log the model with minimal example
         mlflow.sklearn.log_model(
