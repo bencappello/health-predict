@@ -24,11 +24,11 @@ default_args = {
 dag = DAG(
     'health_predict_training_hpo',
     default_args=default_args,
-    description='Train and tune models for health prediction',
+    description='Train and tune models for health prediction with drift-aware retraining',
     schedule_interval=None,  # Set to None for manual triggering
     start_date=datetime(2025, 5, 10),
     catchup=False,
-    tags=['health-predict', 'training', 'hpo'],
+    tags=['health-predict', 'training', 'hpo', 'drift-aware'],
 )
 
 # Define environment variables for the training script
@@ -45,14 +45,166 @@ env_vars = {
     'RAY_LOCAL_DIR': '/opt/airflow/ray_results_airflow_hpo',
 }
 
-# Task 1: Run training and HPO using the train_model.py script
+# Function to prepare drift-aware training data
+def prepare_drift_aware_training_data(**kwargs):
+    """
+    Prepare training data for drift-triggered retraining by combining historical and new data
+    """
+    import boto3
+    import pandas as pd
+    from io import StringIO
+    
+    logging.info("Starting drift-aware training data preparation...")
+    
+    # Extract drift context from DAG run configuration
+    dag_run = kwargs['dag_run']
+    drift_context = dag_run.conf if dag_run.conf else {}
+    
+    s3_bucket = env_vars['S3_BUCKET_NAME']
+    s3_client = boto3.client('s3')
+    
+    # Default data paths
+    base_train_key = env_vars['TRAIN_KEY']
+    base_validation_key = env_vars['VALIDATION_KEY']
+    
+    # Check if this is a drift-triggered retraining
+    is_drift_triggered = drift_context.get('drift_triggered', False)
+    drift_batch_path = drift_context.get('drift_batch_path', '')
+    drift_severity = drift_context.get('drift_severity', 'none')
+    
+    logging.info(f"Drift triggered: {is_drift_triggered}")
+    logging.info(f"Drift severity: {drift_severity}")
+    logging.info(f"Drift batch path: {drift_batch_path}")
+    
+    if is_drift_triggered and drift_batch_path:
+        logging.info("Preparing cumulative training data for drift-triggered retraining...")
+        
+        # Load base training data
+        logging.info(f"Loading base training data from {base_train_key}")
+        train_response = s3_client.get_object(Bucket=s3_bucket, Key=base_train_key)
+        base_train_data = pd.read_csv(StringIO(train_response['Body'].read().decode('utf-8')))
+        
+        # Load validation data for temporal split
+        logging.info(f"Loading base validation data from {base_validation_key}")
+        val_response = s3_client.get_object(Bucket=s3_bucket, Key=base_validation_key)
+        base_val_data = pd.read_csv(StringIO(val_response['Body'].read().decode('utf-8')))
+        
+        # Combine base training and validation data for cumulative approach
+        combined_base_data = pd.concat([base_train_data, base_val_data], ignore_index=True)
+        logging.info(f"Combined base data shape: {combined_base_data.shape}")
+        
+        # Load drift batch data (the new data that triggered drift)
+        logging.info(f"Loading drift batch data from {drift_batch_path}")
+        batch_response = s3_client.get_object(Bucket=s3_bucket, Key=drift_batch_path)
+        drift_batch_data = pd.read_csv(StringIO(batch_response['Body'].read().decode('utf-8')))
+        logging.info(f"Drift batch data shape: {drift_batch_data.shape}")
+        
+        # Load any additional processed batches from drift monitoring
+        additional_batches = []
+        drift_batch_prefix = 'drift_monitoring/batch_data/'
+        
+        try:
+            # List all batch files to include cumulative data
+            response = s3_client.list_objects_v2(Bucket=s3_bucket, Prefix=drift_batch_prefix)
+            if 'Contents' in response:
+                batch_keys = [obj['Key'] for obj in response['Contents'] if obj['Key'].endswith('.csv')]
+                batch_keys.sort()  # Process in chronological order
+                
+                for batch_key in batch_keys:
+                    if batch_key != drift_batch_path:  # Don't double-load the triggering batch
+                        logging.info(f"Loading additional batch: {batch_key}")
+                        batch_response = s3_client.get_object(Bucket=s3_bucket, Key=batch_key)
+                        batch_data = pd.read_csv(StringIO(batch_response['Body'].read().decode('utf-8')))
+                        additional_batches.append(batch_data)
+        except Exception as e:
+            logging.warning(f"Error loading additional batches: {e}")
+        
+        # Combine all data using cumulative approach
+        all_data_frames = [combined_base_data, drift_batch_data] + additional_batches
+        combined_data = pd.concat(all_data_frames, ignore_index=True)
+        
+        # Remove duplicates if any
+        combined_data = combined_data.drop_duplicates()
+        logging.info(f"Combined cumulative data shape after deduplication: {combined_data.shape}")
+        
+        # Create temporal train/validation split (80/20 with most recent 20% as validation)
+        sorted_data = combined_data.copy()  # Use index as time proxy since we don't have timestamps
+        split_point = int(len(sorted_data) * 0.8)
+        
+        new_train_data = sorted_data.iloc[:split_point]
+        new_val_data = sorted_data.iloc[split_point:]
+        
+        logging.info(f"New temporal split - Train: {new_train_data.shape}, Validation: {new_val_data.shape}")
+        
+        # Upload new training data to S3
+        drift_train_key = f'drift_monitoring/retraining_data/drift_train_{int(time.time())}.csv'
+        drift_val_key = f'drift_monitoring/retraining_data/drift_val_{int(time.time())}.csv'
+        
+        # Upload training data
+        train_csv_buffer = StringIO()
+        new_train_data.to_csv(train_csv_buffer, index=False)
+        s3_client.put_object(
+            Bucket=s3_bucket,
+            Key=drift_train_key,
+            Body=train_csv_buffer.getvalue()
+        )
+        
+        # Upload validation data
+        val_csv_buffer = StringIO()
+        new_val_data.to_csv(val_csv_buffer, index=False)
+        s3_client.put_object(
+            Bucket=s3_bucket,
+            Key=drift_val_key,
+            Body=val_csv_buffer.getvalue()
+        )
+        
+        logging.info(f"Uploaded drift training data to {drift_train_key}")
+        logging.info(f"Uploaded drift validation data to {drift_val_key}")
+        
+        # Return the new data keys and drift context
+        return {
+            'train_key': drift_train_key,
+            'validation_key': drift_val_key,
+            'drift_context': drift_context,
+            'data_lineage': {
+                'base_train_records': len(base_train_data),
+                'base_val_records': len(base_val_data),
+                'drift_batch_records': len(drift_batch_data),
+                'additional_batch_records': sum(len(df) for df in additional_batches),
+                'total_combined_records': len(combined_data),
+                'final_train_records': len(new_train_data),
+                'final_val_records': len(new_val_data)
+            }
+        }
+    else:
+        # Regular training (not drift-triggered)
+        logging.info("Using standard training data (not drift-triggered)")
+        return {
+            'train_key': base_train_key,
+            'validation_key': base_validation_key,
+            'drift_context': {'drift_triggered': False},
+            'data_lineage': {'training_type': 'standard'}
+        }
+
+# Task 0: Prepare drift-aware training data
+prepare_training_data_task = PythonOperator(
+    task_id='prepare_drift_aware_training_data',
+    python_callable=prepare_drift_aware_training_data,
+    dag=dag,
+)
+
+# Task 1: Run training and HPO using the train_model.py script (modified to use dynamic data paths)
 run_training_and_hpo = BashOperator(
     task_id='run_training_and_hpo',
     bash_command='''
+    # Get dynamic data paths from upstream task
+    TRAIN_KEY="{{ ti.xcom_pull(task_ids='prepare_drift_aware_training_data')['train_key'] }}"
+    VAL_KEY="{{ ti.xcom_pull(task_ids='prepare_drift_aware_training_data')['validation_key'] }}"
+    
     python /home/ubuntu/health-predict/scripts/train_model.py \
         --s3-bucket-name {{ params.s3_bucket_name }} \
-        --train-key {{ params.train_key }} \
-        --validation-key {{ params.validation_key }} \
+        --train-key "$TRAIN_KEY" \
+        --validation-key "$VAL_KEY" \
         --target-column {{ params.target_column }} \
         --mlflow-tracking-uri {{ params.mlflow_uri }} \
         --mlflow-experiment-name {{ params.experiment_name }} \
@@ -63,8 +215,6 @@ run_training_and_hpo = BashOperator(
     ''',
     params={
         's3_bucket_name': env_vars['S3_BUCKET_NAME'],
-        'train_key': env_vars['TRAIN_KEY'],
-        'validation_key': env_vars['VALIDATION_KEY'],
         'target_column': env_vars['TARGET_COLUMN'],
         'mlflow_uri': env_vars['MLFLOW_TRACKING_URI'],
         'experiment_name': env_vars['EXPERIMENT_NAME'],
@@ -76,16 +226,24 @@ run_training_and_hpo = BashOperator(
     dag=dag,
 )
 
-# Function to find and register the best model in MLflow
+# Function to find and register the best model in MLflow (enhanced with drift context)
 def find_and_register_best_model(**kwargs):
     mlflow_uri = kwargs['params']['mlflow_uri']
     experiment_name = kwargs['params']['experiment_name']
-    target_model_type = "RandomForest"  # Focus on RandomForest for now
+    target_model_type = "XGBoost"  # Use XGBoost as the current production model
     target_registered_model_name = f"HealthPredict_{target_model_type}"
 
     print(f"Setting MLflow tracking URI to: {mlflow_uri}")
     mlflow.set_tracking_uri(mlflow_uri)
     client = mlflow.tracking.MlflowClient()
+
+    # Get drift context from upstream task
+    training_data_info = kwargs['ti'].xcom_pull(task_ids='prepare_drift_aware_training_data')
+    drift_context = training_data_info.get('drift_context', {})
+    data_lineage = training_data_info.get('data_lineage', {})
+    
+    print(f"Drift context: {drift_context}")
+    print(f"Data lineage: {data_lineage}")
 
     # Get experiment ID
     experiment = mlflow.get_experiment_by_name(experiment_name)
@@ -110,7 +268,6 @@ def find_and_register_best_model(**kwargs):
             print(f"No existing Production versions found for {target_registered_model_name}.")
         else:
             print(f"Error checking/archiving existing models: {e}")
-            # Decide if we should continue or raise
 
     # 2. Find the single best run for the target model type
     print(f"Searching for the best {target_model_type} run...")
@@ -141,20 +298,51 @@ def find_and_register_best_model(**kwargs):
 
     if not preprocessor_exists:
         print(f"Preprocessor artifact '{preprocessor_artifact_path}' not found for run {best_run_id}. Skipping registration and promotion.")
-        return # Or handle as an error, perhaps by not returning an empty list if that's an issue downstream
+        return
     else:
         print(f"Preprocessor artifact '{preprocessor_artifact_path}' found for run {best_run_id}.")
 
-    # 3. Register and transition the best model
+    # 3. Register and transition the best model with drift context
     registered_models_info = []
     try:
         model_uri = f"runs:/{best_run_id}/model"
         print(f"Registering model from URI: {model_uri}")
+        
+        # Add drift context as model description
+        model_description = f"Model trained with drift-aware pipeline. "
+        if drift_context.get('drift_triggered', False):
+            model_description += f"Drift-triggered retraining (severity: {drift_context.get('drift_severity', 'unknown')}). "
+            model_description += f"Training data lineage: {data_lineage}."
+        else:
+            model_description += "Standard training (no drift detected)."
+        
         registered_model = mlflow.register_model(
             model_uri=model_uri,
-            name=target_registered_model_name
+            name=target_registered_model_name,
+            description=model_description
         )
         print(f"Registered model '{registered_model.name}' version {registered_model.version}.")
+
+        # Add drift context tags to the model version
+        if drift_context.get('drift_triggered', False):
+            client.set_model_version_tag(
+                name=registered_model.name,
+                version=registered_model.version,
+                key="drift_triggered",
+                value="true"
+            )
+            client.set_model_version_tag(
+                name=registered_model.name,
+                version=registered_model.version,
+                key="drift_severity",
+                value=drift_context.get('drift_severity', 'unknown')
+            )
+            client.set_model_version_tag(
+                name=registered_model.name,
+                version=registered_model.version,
+                key="retraining_data_records",
+                value=str(data_lineage.get('total_combined_records', 0))
+            )
 
         print(f"Transitioning version {registered_model.version} to Production...")
         client.transition_model_version_stage(
@@ -170,7 +358,9 @@ def find_and_register_best_model(**kwargs):
             'f1_score': f1_score,
             'registered_model': registered_model.name,
             'version': registered_model.version,
-            'stage': 'Production'
+            'stage': 'Production',
+            'drift_context': drift_context,
+            'data_lineage': data_lineage
         })
 
     except Exception as e:
@@ -329,4 +519,4 @@ test_api_before_deployment_task = PythonOperator(
 )
 
 # Define the task dependencies
-run_training_and_hpo >> find_and_register_best_model_task >> test_api_before_deployment_task 
+prepare_training_data_task >> run_training_and_hpo >> find_and_register_best_model_task >> test_api_before_deployment_task 
