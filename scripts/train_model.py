@@ -174,85 +174,154 @@ def main(args):
 
     # TEMP DEBUG: Sample tiny subset of data for ultra-fast training (under 10 seconds)
     # TODO: Remove data sampling after DAG validation
-    print("=== TEMP DEBUG: Sampling tiny dataset for speed ===")
-    sample_size = min(500, len(X_train_for_preprocessor_fitting))  # Use max 500 rows
-    sample_indices = np.random.choice(len(X_train_for_preprocessor_fitting), sample_size, replace=False)
-    X_train_sampled = X_train_for_preprocessor_fitting.iloc[sample_indices]
-    y_train_sampled = y_train_for_preprocessor_fitting.iloc[sample_indices]
+    print("=== PHASE 2: PRODUCTION XGBOOST TRAINING ===")
+    print("Using full dataset and Ray Tune HPO for robust model training")
     
-    # Use preprocess_data to transform X_train and X_val, with fit_preprocessor=False
-    X_train_processed_df = preprocess_data(X_train_sampled, preprocessor, fit_preprocessor=False)
-    X_val_processed_df = preprocess_data(X_val_for_testing.head(100), preprocessor, fit_preprocessor=False)  # Sample val too
+    # Use production data - full training set (removing debug sampling)
+    # Use full dataset for production-grade training
+    X_train_processed_df = preprocess_data(X_train_for_preprocessor_fitting, preprocessor, fit_preprocessor=False)
+    X_val_processed_df = preprocess_data(X_val_for_testing, preprocessor, fit_preprocessor=False)
 
-    # Convert processed data to numpy for Ray/XGBoost if needed, ensure correct dtypes
+    # Convert processed data to numpy for Ray/XGBoost, ensure correct dtypes
     X_train_processed = X_train_processed_df.to_numpy()
     X_val_processed = X_val_processed_df.to_numpy()
-    y_train_np = y_train_sampled.to_numpy()
-    y_val_np = y_val_for_testing.head(100).to_numpy()
+    y_train_np = y_train_for_preprocessor_fitting.to_numpy()
+    y_val_np = y_val_for_testing.to_numpy()
     
-    # TEMP DEBUG: Skip Ray Tune entirely for ultra-fast training (under 10 seconds)
-    # TODO: Restore Ray Tune HPO after DAG validation
-    print("=== TEMP DEBUG: Skipping Ray Tune, training simple model directly ===")
-        
-    # Use simple fixed hyperparameters for fastest training
-    model_name = "LogisticRegression"
-    simple_hyperparameters = {"C": 1.0, "penalty": "l2"}  # Simple, fast hyperparameters
+    print(f"Production training set size: {X_train_processed.shape}")
+    print(f"Production validation set size: {X_val_processed.shape}")
     
-    print(f"Training {model_name} with fixed hyperparameters: {simple_hyperparameters}")
+    # PHASE 2: RESTORE RAY TUNE HPO FOR PRODUCTION XGBOOST TRAINING
+    print("=== Initializing Ray Tune for production XGBoost HPO ===")
+    
+    # Initialize Ray with proper configuration
+    if ray.is_initialized():
+        ray.shutdown()
+    
+    # Initialize Ray with resource limits suitable for EC2 instance
+    ray.init(local_mode=False, ignore_reinit_error=True, configure_logging=True)
+    
+    # Define production XGBoost hyperparameter search space
+    xgboost_search_space = {
+        "n_estimators": tune.choice([50, 100, 200, 300]),  # More trees for better performance
+        "max_depth": tune.choice([3, 4, 5, 6]),           # Reasonable depth range
+        "learning_rate": tune.uniform(0.01, 0.3),         # Learning rate range
+        "subsample": tune.uniform(0.7, 1.0),              # Subsample ratio
+        "colsample_bytree": tune.uniform(0.7, 1.0),       # Feature sampling
+        "reg_alpha": tune.uniform(0, 1.0),                # L1 regularization
+        "reg_lambda": tune.uniform(0, 1.0),               # L2 regularization
+        "gamma": tune.uniform(0, 0.5),                    # Minimum split loss
+        "random_state": 42
+    }
+    
+    print(f"XGBoost hyperparameter search space: {xgboost_search_space}")
+    
+    # Configure scheduler and search algorithm for production training
+    scheduler = ASHAScheduler(
+        time_attr='training_iteration',
+        max_t=int(args.ray_max_epochs_per_trial),
+        grace_period=int(args.ray_grace_period),
+        reduction_factor=2
+    )
+    
+    search_algorithm = HyperOptSearch(metric="f1_score", mode="max")
+    
+    # Configure Ray Tune
+    tuner = tune.Tuner(
+        tune.with_parameters(
+            train_model_hpo,
+            X_train=X_train_processed,
+            y_train=y_train_np,
+            X_val=X_val_processed,
+            y_val=y_val_np,
+            model_name="XGBoost"
+        ),
+        param_space=xgboost_search_space,
+        tune_config=tune.TuneConfig(
+            scheduler=scheduler,
+            search_alg=search_algorithm,
+            num_samples=int(args.ray_num_samples),
+            metric="f1_score",
+            mode="max"
+        ),
+        run_config=RunConfig(
+            name="XGBoost_HPO_Production",
+            local_dir=args.ray_local_dir,
+            stop={"training_iteration": int(args.ray_max_epochs_per_trial)},
+            verbose=1
+        )
+    )
+    
+    print(f"Starting Ray Tune HPO with {args.ray_num_samples} trials...")
+    results = tuner.fit()
+    
+    # Get best trial results
+    best_result = results.get_best_result("f1_score", "max")
+    best_params = best_result.config
+    best_metrics = best_result.metrics
+    
+    print(f"Best XGBoost hyperparameters: {best_params}")
+    print(f"Best validation metrics: {best_metrics}")
+    
+    # Train final production model with best hyperparameters
+    print("=== Training Final Production XGBoost Model ===")
 
     # Ensure any previous run is ended before starting 
     mlflow.end_run() 
 
-    # Train simple model directly without HPO
-    with mlflow.start_run(run_name=f"Best_{model_name}_Model") as final_run:
-        mlflow.log_params(simple_hyperparameters)
-        mlflow.set_tag("model_name", model_name)
-        mlflow.set_tag("best_hpo_model", "False")  # No HPO performed
-        mlflow.set_tag("debug_mode", "True")
+    # Train final production model with best parameters from HPO
+    with mlflow.start_run(run_name=f"Best_XGBoost_Model_Production") as final_run:
+        mlflow.log_params(best_params)
+        mlflow.set_tag("model_name", "XGBoost")
+        mlflow.set_tag("best_hpo_model", "True")  # HPO was performed
+        mlflow.set_tag("debug_mode", "False")     # Production mode
+        mlflow.set_tag("training_mode", "production")
         
-        # Create and train model with minimal configuration
-        final_model = LogisticRegression(
-            solver='liblinear', 
-            class_weight='balanced', 
-            max_iter=10,  # Very few iterations for speed
-            **simple_hyperparameters
+        # Create final XGBoost model with best hyperparameters
+        final_model = xgb.XGBClassifier(
+            use_label_encoder=False,
+            eval_metric='logloss',
+            verbosity=1,  # Show some training progress
+            **best_params
         )
         
-        print("Fitting model...")
+        print("Fitting production XGBoost model with best hyperparameters...")
         final_model.fit(X_train_processed, y_train_np)
                 
-        # Quick evaluation on validation set
+        # Comprehensive evaluation on validation set
         y_pred_val_final = final_model.predict(X_val_processed)
         y_proba_val_final = final_model.predict_proba(X_val_processed)[:, 1] if hasattr(final_model, "predict_proba") else None
         final_val_metrics = evaluate_model(y_val_np, y_pred_val_final, y_proba_val_final)
         
-        # Log minimal metrics
+        # Log comprehensive metrics
         mlflow.log_metrics({f"val_{k}": v for k,v in final_val_metrics.items()})
-        print(f"Validation metrics: {final_val_metrics}")
+        print(f"Final Production Model Validation metrics: {final_val_metrics}")
 
         # Log the preprocessor artifact used for this model
         if os.path.exists(local_preprocessor_path):
             mlflow.log_artifact(local_preprocessor_path, artifact_path="preprocessor")
         print(f"Logged preprocessor artifact to run {final_run.info.run_id}.")
 
-        # Log the model with minimal example
+        # Log the production XGBoost model with full example set
         mlflow.sklearn.log_model(
             sk_model=final_model,
             artifact_path="model",
-            registered_model_name=f"Best_{model_name}",
+            registered_model_name=f"Best_XGBoost",
             serialization_format=mlflow.sklearn.SERIALIZATION_FORMAT_CLOUDPICKLE,
-            input_example=X_train_processed_df.iloc[:1],  # Just 1 example for speed
+            input_example=X_train_processed_df.iloc[:5],  # More examples for production
             pyfunc_predict_fn="predict_proba"
         )
-        print(f"Logged {model_name} model to MLflow.")
+        print(f"Logged production XGBoost model to MLflow.")
             
     if os.path.exists(local_preprocessor_path): # Clean up local preprocessor file
         os.remove(local_preprocessor_path)
         
-    # TEMP DEBUG: Ray not used in ultra-fast mode
-    # ray.shutdown()  # Commented out since we're not using Ray
+    # Shutdown Ray after HPO completion
+    ray.shutdown()
         
-    print("\nTraining script finished - ultra-fast mode.")
+    print("\nProduction XGBoost training completed successfully!")
+    print(f"Best F1 Score: {final_val_metrics.get('f1_score', 0):.4f}")
+    print(f"Best ROC AUC: {final_val_metrics.get('roc_auc_score', 0):.4f}")
 
 
 if __name__ == "__main__":
