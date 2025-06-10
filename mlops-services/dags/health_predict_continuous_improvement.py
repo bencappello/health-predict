@@ -42,12 +42,11 @@ env_vars = {
     'TRAIN_KEY': 'processed_data/initial_train.csv',
     'VALIDATION_KEY': 'processed_data/initial_validation.csv',
     'TARGET_COLUMN': 'readmitted_binary',
-    # ===== TEMPORARY FAST TRAINING FOR DAG DEBUG =====
-    # TODO: Revert these to production values after DAG testing:
-    # Production values: RAY_NUM_SAMPLES='2', RAY_MAX_EPOCHS='10', RAY_GRACE_PERIOD='5'
-    'RAY_NUM_SAMPLES': '1',  # TEMP: Reduced for fast debugging (production: '2')
-    'RAY_MAX_EPOCHS': '2',   # TEMP: Reduced for fast debugging (production: '10') 
-    'RAY_GRACE_PERIOD': '1', # TEMP: Reduced for fast debugging (production: '5')
+    # ===== PHASE 2: PRODUCTION TRAINING PARAMETERS =====
+    # Updated from debug values to production values for robust XGBoost training:
+    'RAY_NUM_SAMPLES': '10',  # PRODUCTION: Increased from 1 to 10 for proper HPO
+    'RAY_MAX_EPOCHS': '20',   # PRODUCTION: Increased from 2 to 20 for thorough training
+    'RAY_GRACE_PERIOD': '5',  # PRODUCTION: Increased from 1 to 5 for better evaluation
     # ================================================
     'RAY_LOCAL_DIR': '/opt/airflow/ray_results_airflow_hpo',
     # Quality Gate Configuration
@@ -123,7 +122,7 @@ def evaluate_model_performance(**kwargs):
     """Consolidate and evaluate all trained models"""
     mlflow_uri = kwargs['params']['mlflow_uri']
     experiment_name = kwargs['params']['experiment_name']
-    target_model_type = "LogisticRegression"  # TEMP DEBUG: Changed from RandomForest for fast debugging
+    target_model_type = "XGBoost"  # SWITCHED TO XGBOOST: Changed from LogisticRegression for XGBoost implementation
     
     logging.info(f"Setting MLflow tracking URI to: {mlflow_uri}")
     mlflow.set_tracking_uri(mlflow_uri)
@@ -140,18 +139,18 @@ def evaluate_model_performance(**kwargs):
     # Find the best run for the target model type
     logging.info(f"Searching for the best {target_model_type} run...")
     
-    # TEMP DEBUG: In ultra-fast debug mode, we look for debug_mode = True runs instead of best_hpo_model = True
-    # TODO: Restore HPO-based search after DAG validation 
+    # PHASE 2: PRODUCTION MODE - Look for production models first, then fall back to debug mode
+    # Search for production models with best_hpo_model = True and debug_mode = False
     best_runs = mlflow.search_runs(
         experiment_ids=[experiment_id],
-        filter_string=f"tags.debug_mode = 'True' AND tags.model_name = '{target_model_type}'",
+        filter_string=f"tags.best_hpo_model = 'True' AND tags.model_name = '{target_model_type}' AND tags.debug_mode = 'False'",
         order_by=["metrics.val_f1_score DESC"],
         max_results=1
     )
     
-    # If no debug runs found, fall back to original HPO search
+    # If no production runs found, fall back to any production runs (regardless of debug_mode)
     if best_runs.empty:
-        logging.info("No debug runs found, falling back to HPO-based search...")
+        logging.info("No production runs found, searching for any HPO-based runs...")
         best_runs = mlflow.search_runs(
             experiment_ids=[experiment_id],
             filter_string=f"tags.best_hpo_model = 'True' AND tags.model_name = '{target_model_type}'",
@@ -159,8 +158,18 @@ def evaluate_model_performance(**kwargs):
             max_results=1
         )
     
+    # Final fallback to debug runs if needed (for backward compatibility)
     if best_runs.empty:
-        raise AirflowFailException(f"No runs found tagged as best_hpo_model for {target_model_type}.")
+        logging.info("No HPO runs found, falling back to debug mode runs...")
+        best_runs = mlflow.search_runs(
+            experiment_ids=[experiment_id],
+            filter_string=f"tags.debug_mode = 'True' AND tags.model_name = '{target_model_type}'",
+            order_by=["metrics.val_f1_score DESC"],
+            max_results=1
+        )
+    
+    if best_runs.empty:
+        raise AirflowFailException(f"No runs found for {target_model_type}.")
     
     best_run = best_runs.iloc[0]
     best_run_id = best_run['run_id']
@@ -211,62 +220,55 @@ def compare_against_production(**kwargs):
     
     logging.info(f"New model F1 score: {new_f1_score}")
     
-    # TEMP DEBUG: Force DEPLOY decision for DAG testing
-    # TODO: Restore actual comparison logic after DAG validation
-    logging.info("=== TEMP DEBUG MODE: Forcing DEPLOY decision ===")
-    decision = "DEPLOY"
-    reason = "TEMP DEBUG: Bypassing quality gates for DAG testing"
-    production_f1 = 0.0
+    # PHASE 2: PRODUCTION MODE - Restore actual comparison logic
+    # Get current production model performance
+    mlflow.set_tracking_uri(mlflow_uri)
+    client = mlflow.tracking.MlflowClient()
     
-    # COMMENTED OUT FOR DEBUG - RESTORE AFTER TESTING:
-    # # Get current production model performance
-    # mlflow.set_tracking_uri(mlflow_uri)
-    # client = mlflow.tracking.MlflowClient()
-    # 
-    # try:
-    #     # Get current production model
-    #     model_name = "HealthPredict_LogisticRegression"  # Updated for LR model
-    #     production_versions = client.get_latest_versions(model_name, stages=["Production"])
-    #     
-    #     if not production_versions:
-    #         logging.info("No current production model found. Deploying new model.")
-    #         decision = "DEPLOY"
-    #         reason = "No current production model - deploying first model"
-    #         production_f1 = 0.0
-    #     else:
-    #         production_version = production_versions[0]
-    #         production_run_id = production_version.run_id
-    #         
-    #         # Get production model metrics
-    #         production_run = client.get_run(production_run_id)
-    #         production_f1 = production_run.data.metrics.get('val_f1_score', 0.0)
-    #         
-    #         logging.info(f"Current production F1 score: {production_f1}")
-    #         
-    #         # Calculate improvement
-    #         improvement = new_f1_score - production_f1
-    #         improvement_pct = (improvement / production_f1) * 100 if production_f1 > 0 else float('inf')
-    #         
-    #         logging.info(f"F1 improvement: {improvement:.4f} ({improvement_pct:.2f}%)")
-    #         logging.info(f"Required threshold: {improvement_threshold:.4f}")
-    #         
-    #         # Decision logic
-    #         if improvement >= improvement_threshold:
-    #             decision = "DEPLOY"
-    #             reason = f"Significant improvement: {improvement:.4f} F1 score increase ({improvement_pct:.2f}%)"
-    #         elif improvement >= 0:
-    #             decision = "DEPLOY_REFRESH"
-    #             reason = f"Minor improvement: {improvement:.4f} F1 score increase - refreshing deployment"
-    #         else:
-    #             decision = "SKIP"
-    #             reason = f"Performance regression: {improvement:.4f} F1 score decrease"
-    # 
-    # except Exception as e:
-    #     logging.error(f"Error comparing against production: {e}")
-    #     # Default to deploy if we can't compare
-    #     decision = "DEPLOY"
-    #     reason = f"Could not compare against production model (error: {e}) - deploying new model"
-    #     production_f1 = 0.0
+    try:
+        # Get current production model - use generic name for model type agnostic approach
+        model_name = "HealthPredictModel"  # Generic name that works for any model type
+        production_versions = client.get_latest_versions(model_name, stages=["Production"])
+        
+        if not production_versions:
+            logging.info("No current production model found. Deploying new model.")
+            decision = "DEPLOY"
+            reason = "No current production model - deploying first XGBoost model"
+            production_f1 = 0.0
+        else:
+            production_version = production_versions[0]
+            production_run_id = production_version.run_id
+            
+            # Get production model metrics
+            production_run = client.get_run(production_run_id)
+            production_f1 = production_run.data.metrics.get('val_f1_score', 0.0)
+            
+            logging.info(f"Current production F1 score: {production_f1}")
+            
+            # Calculate improvement
+            improvement = new_f1_score - production_f1
+            improvement_pct = (improvement / production_f1) * 100 if production_f1 > 0 else float('inf')
+            
+            logging.info(f"F1 improvement: {improvement:.4f} ({improvement_pct:.2f}%)")
+            logging.info(f"Required threshold: {improvement_threshold:.4f}")
+            
+            # Decision logic
+            if improvement >= improvement_threshold:
+                decision = "DEPLOY"
+                reason = f"Significant improvement: {improvement:.4f} F1 score increase ({improvement_pct:.2f}%)"
+            elif improvement >= 0:
+                decision = "DEPLOY_REFRESH"
+                reason = f"Minor improvement: {improvement:.4f} F1 score increase - refreshing deployment"
+            else:
+                decision = "SKIP"
+                reason = f"Performance regression: {improvement:.4f} F1 score decrease"
+
+    except Exception as e:
+        logging.error(f"Error comparing against production: {e}")
+        # Default to deploy if we can't compare
+        decision = "DEPLOY"
+        reason = f"Could not compare against production model (error: {e}) - deploying new model"
+        production_f1 = 0.0
     
     decision_data = {
         'decision': decision,
