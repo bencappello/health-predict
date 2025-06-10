@@ -58,5 +58,11 @@ RUN pip install --no-cache-dir --user kubernetes>=28.1.0
 RUN pip install --no-cache-dir --user hyperopt
 RUN pip install --no-cache-dir --user pytest>=7.0.0
 
+# Drift Detection Dependencies (Phase 5)
+RUN pip install --no-cache-dir --user evidently==0.4.22
+RUN pip install --no-cache-dir --user 'scipy>=1.10.0'
+RUN pip install --no-cache-dir --user 'plotly>=5.14.0'
+RUN pip install --no-cache-dir --user 'kaleido>=0.2.1'
+
 # Entrypoint and CMD are inherited from the base apache/airflow image
 # EXPOSE commands are typically handled by docker-compose 
