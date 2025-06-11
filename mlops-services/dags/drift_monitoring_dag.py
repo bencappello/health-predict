@@ -5,35 +5,42 @@ from airflow.operators.dummy import DummyOperator
 from airflow.operators.trigger_dagrun import TriggerDagRunOperator
 from airflow.operators.python import BranchPythonOperator
 from airflow.utils.trigger_rule import TriggerRule
+from airflow.utils.task_group import TaskGroup
 from datetime import datetime, timedelta
 import pandas as pd
 import boto3
 import os
 import logging
-from typing import List, Dict, Any
+import time
+import json
+import uuid
+from typing import List, Dict, Any, Optional
 
-# Define default arguments for the DAG
+# Define default arguments for the DAG with enhanced error handling
 default_args = {
     'owner': 'airflow',
     'depends_on_past': False,
     'email_on_failure': False,
     'email_on_retry': False,
-    'retries': 1,
-    'retry_delay': timedelta(minutes=5),
+    'retries': 3,  # Increased retries for production resilience
+    'retry_delay': timedelta(minutes=2),  # Shorter retry delay for faster recovery
+    'retry_exponential_backoff': True,  # Exponential backoff for retry strategy
+    'max_retry_delay': timedelta(minutes=10),  # Maximum retry delay
 }
 
-# Define the DAG
+# Define the enhanced DAG with comprehensive monitoring
 dag = DAG(
-    'health_predict_drift_monitoring',
+    'health_predict_drift_monitoring_v2',
     default_args=default_args,
-    description='Monitor data drift and trigger retraining when needed',
-    schedule_interval=timedelta(hours=6),  # Run every 6 hours for simulation
-    start_date=datetime(2025, 6, 10),
+    description='Enhanced drift monitoring with parallel processing and comprehensive error handling',
+    schedule_interval=timedelta(hours=3),  # More frequent monitoring for Week 5 testing
+    start_date=datetime(2025, 1, 24),
     catchup=False,
-    tags=['health-predict', 'drift-monitoring', 'phase-5'],
+    max_active_runs=2,  # Allow multiple concurrent runs for testing
+    tags=['health-predict', 'drift-monitoring', 'phase-5', 'week-5', 'enhanced'],
 )
 
-# Environment variables for drift monitoring
+# Enhanced environment variables for comprehensive monitoring
 env_vars = {
     'S3_BUCKET_NAME': os.getenv('S3_BUCKET_NAME', 'health-predict-mlops-f9ac6509'),
     'MLFLOW_TRACKING_URI': os.getenv('MLFLOW_TRACKING_URI', 'http://mlflow:5000'),
@@ -44,98 +51,159 @@ env_vars = {
     'DRIFT_THRESHOLD_MINOR': float(os.getenv('DRIFT_THRESHOLD_MINOR', '0.05')),
     'DRIFT_THRESHOLD_MODERATE': float(os.getenv('DRIFT_THRESHOLD_MODERATE', '0.15')),
     'DRIFT_THRESHOLD_MAJOR': float(os.getenv('DRIFT_THRESHOLD_MAJOR', '0.30')),
-    'TARGET_COLUMN': 'readmitted_binary',  # Healthcare target column
-    'BATCH_SIZE': 1000,  # Default batch size for simulation
+    'TARGET_COLUMN': 'readmitted_binary',
+    'BATCH_SIZE': 1000,
+    'MAX_PARALLEL_BATCHES': 3,  # Maximum parallel batch processing
+    'BATCH_PROCESSING_BACKLOG_LIMIT': 10,  # Maximum backlog before alerting
+    'DRIFT_ALERT_COOLDOWN_HOURS': 6,  # Cooldown period for drift alerts
 }
 
-def simulate_new_data_batch(**kwargs):
+def get_available_batches(**kwargs) -> List[Dict[str, Any]]:
     """
-    Simulate arrival of new data batch by creating a subset from future_data.csv
-    This simulates the real-world scenario of new data arriving over time
+    Dynamically discover available data batches for processing
+    This implements dynamic task generation based on available data
     """
-    logging.info("Starting data batch simulation...")
+    logging.info("Discovering available data batches for processing...")
+    
+    s3_client = boto3.client('s3')
+    bucket_name = env_vars['S3_BUCKET_NAME']
+    batch_prefix = env_vars['DRIFT_BATCH_DATA_S3_PREFIX']
+    
+    try:
+        # List all batch files in S3
+        response = s3_client.list_objects_v2(
+            Bucket=bucket_name,
+            Prefix=f"{batch_prefix}/",
+            MaxKeys=env_vars['BATCH_PROCESSING_BACKLOG_LIMIT']
+        )
+        
+        available_batches = []
+        
+        if 'Contents' in response:
+            for obj in response['Contents']:
+                key = obj['Key']
+                if key.endswith('.csv') and 'batch_' in key:
+                    batch_info = {
+                        'batch_id': key.split('/')[-1].replace('.csv', ''),
+                        's3_key': key,
+                        'size_bytes': obj['Size'],
+                        'last_modified': obj['LastModified'].isoformat(),
+                        'processing_priority': obj['LastModified'].timestamp()  # Older batches have higher priority
+                    }
+                    available_batches.append(batch_info)
+        
+        # Sort by processing priority (oldest first)
+        available_batches.sort(key=lambda x: x['processing_priority'])
+        
+        # Limit to max parallel processing capacity
+        available_batches = available_batches[:env_vars['MAX_PARALLEL_BATCHES']]
+        
+        logging.info(f"Found {len(available_batches)} batches available for processing")
+        
+        return available_batches
+        
+    except Exception as e:
+        logging.error(f"Error discovering available batches: {str(e)}")
+        # Return empty list on error to gracefully handle the failure
+        return []
+
+def create_simulation_batch(**kwargs) -> Dict[str, Any]:
+    """
+    Enhanced batch simulation with realistic data arrival patterns
+    """
+    logging.info("Creating enhanced simulation batch with realistic patterns...")
     
     s3_client = boto3.client('s3')
     bucket_name = env_vars['S3_BUCKET_NAME']
     
-    # Generate batch identifier based on execution date
+    # Generate unique batch identifier with timestamp and random component
     execution_date = kwargs['execution_date']
-    batch_id = execution_date.strftime("%Y%m%d_%H%M%S")
-    batch_filename = f"batch_{batch_id}.csv"
+    batch_id = f"sim_batch_{execution_date.strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
+    batch_filename = f"{batch_id}.csv"
     
     try:
-        # Download future_data.csv to process
+        # Load future data for batch creation
         future_data_key = 'processed_data/future_data.csv'
         local_future_data = f'/tmp/future_data_{batch_id}.csv'
         
-        logging.info(f"Downloading {future_data_key} from S3...")
+        logging.info(f"Loading future data from {future_data_key}...")
         s3_client.download_file(bucket_name, future_data_key, local_future_data)
         
-        # Read the data and create a batch
         df = pd.read_csv(local_future_data)
         logging.info(f"Loaded future data with {len(df)} rows")
         
-        # Calculate which batch to extract (based on execution count)
-        # For simplicity, we'll use a hash of the batch_id to get a pseudo-random start position
-        start_row = (hash(batch_id) % (len(df) - env_vars['BATCH_SIZE'])) if len(df) > env_vars['BATCH_SIZE'] else 0
-        end_row = start_row + env_vars['BATCH_SIZE']
+        # Create realistic batch size variation (800-1200 rows)
+        import random
+        batch_size = random.randint(800, 1200)
         
-        # Extract the batch
+        # Calculate start position with some randomization
+        max_start = max(0, len(df) - batch_size)
+        start_row = random.randint(0, max_start) if max_start > 0 else 0
+        end_row = min(start_row + batch_size, len(df))
+        
+        # Extract batch data
         batch_data = df.iloc[start_row:end_row].copy()
+        
+        # Add realistic data quality variations
+        # Simulate missing values in 1-3% of records
+        if random.random() < 0.7:  # 70% chance of introducing quality issues
+            n_missing = int(len(batch_data) * random.uniform(0.01, 0.03))
+            missing_indices = random.sample(range(len(batch_data)), n_missing)
+            missing_columns = random.sample(list(batch_data.columns), min(3, len(batch_data.columns)))
+            
+            for idx in missing_indices:
+                for col in missing_columns:
+                    if random.random() < 0.3:  # 30% chance per column
+                        batch_data.iloc[idx, batch_data.columns.get_loc(col)] = None
+        
         logging.info(f"Created batch with {len(batch_data)} rows (rows {start_row}-{end_row})")
         
-        # Save batch locally and upload to S3
+        # Save and upload batch
         local_batch_path = f'/tmp/{batch_filename}'
         batch_data.to_csv(local_batch_path, index=False)
         
-        # Upload to S3 batch_data directory
         s3_batch_key = f"{env_vars['DRIFT_BATCH_DATA_S3_PREFIX']}/{batch_filename}"
         s3_client.upload_file(local_batch_path, bucket_name, s3_batch_key)
         
-        logging.info(f"Uploaded batch to s3://{bucket_name}/{s3_batch_key}")
+        logging.info(f"Uploaded simulation batch to s3://{bucket_name}/{s3_batch_key}")
         
-        # Clean up local files
+        # Cleanup
         os.remove(local_future_data)
         os.remove(local_batch_path)
         
-        # Return batch information for downstream tasks
+        # Return comprehensive batch metadata
         batch_info = {
             'batch_id': batch_id,
             'batch_filename': batch_filename,
-            's3_batch_path': s3_batch_key,  # Store the S3 key for drift context
+            's3_batch_path': s3_batch_key,
             'batch_size': len(batch_data),
             'start_row': start_row,
-            'end_row': end_row
+            'end_row': end_row,
+            'data_quality_score': 1.0 - (n_missing / len(batch_data) if 'n_missing' in locals() else 0),
+            'simulation_timestamp': execution_date.isoformat(),
+            'batch_type': 'simulation'
         }
         
-        logging.info(f"Batch simulation completed: {batch_info}")
         return batch_info
         
     except Exception as e:
-        logging.error(f"Error in data batch simulation: {str(e)}")
+        logging.error(f"Error creating simulation batch: {str(e)}")
         raise
 
-def detect_drift(**kwargs):
+def parallel_drift_detection(batch_info: Dict[str, Any], **kwargs) -> Dict[str, Any]:
     """
-    Run drift detection on the new batch using the monitor_drift.py script
-    Returns drift status for downstream decision making
+    Enhanced drift detection with parallel processing capability
     """
-    logging.info("Starting drift detection...")
-    
-    # Get batch info from upstream task
-    batch_info = kwargs['ti'].xcom_pull(task_ids='simulate_data_batch')
-    if not batch_info:
-        raise ValueError("No batch information received from upstream task")
-    
-    logging.info(f"Running drift detection on batch: {batch_info['batch_id']}")
+    batch_id = batch_info['batch_id']
+    logging.info(f"Starting parallel drift detection for batch: {batch_id}")
     
     # Construct S3 paths
     bucket_name = env_vars['S3_BUCKET_NAME']
     new_data_path = f"s3://{bucket_name}/{batch_info['s3_batch_path']}"
     reference_data_path = f"s3://{bucket_name}/{env_vars['DRIFT_REFERENCE_DATA_S3_PREFIX']}/initial_train.csv"
-    reports_path = f"s3://{bucket_name}/{env_vars['DRIFT_REPORTS_S3_PREFIX']}/{batch_info['batch_id']}"
+    reports_path = f"s3://{bucket_name}/{env_vars['DRIFT_REPORTS_S3_PREFIX']}/{batch_id}"
     
-    # Construct the drift monitoring command
+    # Enhanced drift detection command with additional options
     drift_command = f"""
     python /opt/airflow/scripts/monitor_drift.py \
         --s3_new_data_path "{new_data_path}" \
@@ -144,321 +212,414 @@ def detect_drift(**kwargs):
         --mlflow_tracking_uri "{env_vars['MLFLOW_TRACKING_URI']}" \
         --mlflow_experiment_name "{env_vars['DRIFT_MONITORING_EXPERIMENT']}" \
         --target_column "{env_vars['TARGET_COLUMN']}" \
-        --drift_threshold "{env_vars['DRIFT_THRESHOLD_MODERATE']}"
+        --drift_threshold "{env_vars['DRIFT_THRESHOLD_MODERATE']}" \
+        --enable_concept_drift \
+        --verbose
     """
     
     try:
-        # Execute drift detection script
+        start_time = time.time()
+        
+        # Execute drift detection with timeout
         import subprocess
         result = subprocess.run(
             drift_command.strip().split(),
             capture_output=True,
             text=True,
+            timeout=300,  # 5 minute timeout
             check=False
         )
         
-        # Parse the output to get drift status
-        drift_status = result.stdout.strip().split('\n')[-1] if result.stdout else "DRIFT_MONITORING_ERROR"
+        detection_time = time.time() - start_time
         
-        logging.info(f"Drift detection completed. Status: {drift_status}")
-        logging.info(f"Command output: {result.stdout}")
+        # Parse drift status from output
+        drift_status = "DRIFT_MONITORING_ERROR"
+        if result.stdout:
+            lines = result.stdout.strip().split('\n')
+            for line in reversed(lines):  # Check from the end
+                if line in ['DRIFT_DETECTED', 'NO_DRIFT', 'DRIFT_MONITORING_ERROR']:
+                    drift_status = line
+                    break
+        
+        logging.info(f"Drift detection completed in {detection_time:.2f}s. Status: {drift_status}")
         
         if result.stderr:
-            logging.warning(f"Command stderr: {result.stderr}")
+            logging.warning(f"Drift detection stderr: {result.stderr}")
         
-        # Return comprehensive drift information
-        drift_info = {
-            'batch_id': batch_info['batch_id'],
+        # Enhanced drift information with performance metrics
+        drift_result = {
+            'batch_id': batch_id,
             'drift_status': drift_status,
             'drift_detected': drift_status == 'DRIFT_DETECTED',
             'batch_path': batch_info['s3_batch_path'],
             'reports_path': reports_path,
+            'detection_time_seconds': detection_time,
             'command_output': result.stdout,
-            'return_code': result.returncode
+            'return_code': result.returncode,
+            'processing_timestamp': kwargs['execution_date'].isoformat(),
+            'batch_metadata': batch_info
         }
         
-        return drift_info
+        return drift_result
         
+    except subprocess.TimeoutExpired:
+        logging.error(f"Drift detection timed out for batch {batch_id}")
+        return {
+            'batch_id': batch_id,
+            'drift_status': 'DRIFT_MONITORING_TIMEOUT',
+            'drift_detected': False,
+            'error': 'Detection process timed out after 5 minutes'
+        }
     except Exception as e:
-        logging.error(f"Error in drift detection: {str(e)}")
-        drift_info = {
-            'batch_id': batch_info['batch_id'],
+        logging.error(f"Error in parallel drift detection for batch {batch_id}: {str(e)}")
+        return {
+            'batch_id': batch_id,
             'drift_status': 'DRIFT_MONITORING_ERROR',
             'drift_detected': False,
             'error': str(e)
         }
-        return drift_info
 
-def evaluate_drift_severity(**kwargs):
+def comprehensive_drift_evaluation(**kwargs) -> Dict[str, Any]:
     """
-    Evaluate drift severity using graduated response system
+    Enhanced drift evaluation with comprehensive analysis
     """
-    logging.info("Evaluating drift severity with graduated response system...")
+    logging.info("Starting comprehensive drift evaluation...")
     
-    drift_info = kwargs['ti'].xcom_pull(task_ids='run_drift_detection')
-    if not drift_info:
-        raise ValueError("No drift information received from upstream task")
+    # Get drift detection results from XCom
+    drift_results = kwargs['ti'].xcom_pull(task_ids=['parallel_drift_detection_sim'])
     
-    batch_id = drift_info['batch_id']
+    if not drift_results:
+        logging.warning("No drift detection results available")
+        return {
+            'overall_drift_status': 'unknown',
+            'action': 'continue_monitoring',
+            'confidence': 0.0,
+            'reasoning': 'No drift detection results available'
+        }
     
-    # Import graduated response handler
-    import sys
-    sys.path.append('/opt/airflow/scripts')
-    from drift_response_handler import DriftResponseHandler, DriftMetrics
+    # Handle both single result and list of results
+    if not isinstance(drift_results, list):
+        drift_results = [drift_results]
+    
+    # Filter out None results
+    drift_results = [r for r in drift_results if r is not None]
+    
+    if not drift_results:
+        logging.warning("All drift detection results are None")
+        return {
+            'overall_drift_status': 'unknown',
+            'action': 'continue_monitoring',
+            'confidence': 0.0,
+            'reasoning': 'All drift detection processes failed'
+        }
     
     try:
-        # Parse drift metrics from command output
-        command_output = drift_info.get('command_output', '')
-        drift_metrics = parse_drift_metrics_from_output(command_output)
+        # Import drift response handler for comprehensive evaluation
+        import sys
+        sys.path.append('/opt/airflow/scripts')
+        from drift_response_handler import DriftResponseHandler
         
-        # Create drift metrics object
-        metrics = DriftMetrics(
-            dataset_drift_score=drift_metrics.get('dataset_drift_score', 0.0),
-            feature_drift_count=drift_metrics.get('feature_drift_count', 0),
-            total_features=drift_metrics.get('total_features', 1),
-            concept_drift_score=drift_metrics.get('concept_drift_score'),
-            prediction_drift_score=drift_metrics.get('prediction_drift_score'),
-            performance_degradation=drift_metrics.get('performance_degradation'),
-            confidence_score=drift_metrics.get('drift_confidence_score', 0.5)
+        # Initialize response handler
+        response_handler = DriftResponseHandler()
+        
+        # Aggregate drift results for comprehensive analysis
+        total_batches = len(drift_results)
+        drift_detected_count = sum(1 for r in drift_results if r.get('drift_detected', False))
+        error_count = sum(1 for r in drift_results if r.get('drift_status') == 'DRIFT_MONITORING_ERROR')
+        
+        # Calculate overall drift confidence
+        drift_confidence = drift_detected_count / total_batches if total_batches > 0 else 0.0
+        
+        # Determine overall drift status
+        if drift_confidence >= 0.7:
+            overall_status = 'major_drift'
+        elif drift_confidence >= 0.3:
+            overall_status = 'moderate_drift'
+        elif drift_confidence > 0:
+            overall_status = 'minor_drift'
+        else:
+            overall_status = 'no_drift'
+        
+        # Create comprehensive drift context for evaluation
+        drift_context = {
+            'total_batches_processed': total_batches,
+            'batches_with_drift': drift_detected_count,
+            'batch_error_count': error_count,
+            'drift_confidence': drift_confidence,
+            'overall_drift_status': overall_status,
+            'detection_results': drift_results,
+            'evaluation_timestamp': kwargs['execution_date'].isoformat()
+        }
+        
+        # Use response handler for intelligent decision making
+        response = response_handler.evaluate_drift_response(
+            drift_metrics={
+                'dataset_drift_score': drift_confidence,
+                'feature_drift_count': drift_detected_count,
+                'total_features': 50,  # Approximate feature count
+                'drift_confidence_score': drift_confidence
+            },
+            execution_context=drift_context
         )
         
-        # Get drift context
-        drift_context = {
-            'batch_id': batch_id,
-            'execution_date': kwargs['execution_date'].isoformat(),
-            'last_retraining_timestamp': get_last_retraining_timestamp(),
-            'consecutive_major_drift_count': get_consecutive_drift_count(),
-            'batch_path': drift_info.get('batch_path', ''),
-            'reports_path': drift_info.get('reports_path', '')
-        }
+        logging.info(f"Comprehensive evaluation complete: {response['action']} (confidence: {response['confidence']:.3f})")
         
-        # Initialize handler and evaluate response
-        handler = DriftResponseHandler()
-        response = handler.evaluate_drift_response(metrics, drift_context)
-        
-        # Convert response to serializable format
-        severity_info = {
-            'batch_id': batch_id,
-            'drift_status': drift_info['drift_status'],
-            'severity': response.severity.value,
-            'action': response.action.value,
-            'confidence': response.confidence,
-            'reasoning': response.reasoning,
-            'recommendations': response.recommendations,
-            'escalation_needed': response.escalation_needed,
-            'requires_retraining': response.action.value in ['incremental_retrain', 'full_retrain'],
-            'drift_context': drift_context,
-            'drift_metrics': drift_metrics
-        }
-        
-        logging.info(f"Graduated drift response: {response.severity.value} -> {response.action.value}")
-        logging.info(f"Confidence: {response.confidence:.2f}, Reasoning: {response.reasoning}")
-        
-        return severity_info
+        return response
         
     except Exception as e:
-        logging.error(f"Error in graduated drift evaluation: {e}")
-        # Fallback to simple evaluation
-        drift_status = drift_info['drift_status']
-        
-        if drift_status == 'DRIFT_DETECTED':
-            severity = 'moderate'
-            action = 'incremental_retrain'
-        elif drift_status == 'NO_DRIFT':
-            severity = 'none'
-            action = 'continue_monitoring'
-        else:
-            severity = 'unknown'
-            action = 'continue_monitoring'
-        
+        logging.error(f"Error in comprehensive drift evaluation: {str(e)}")
         return {
-            'batch_id': batch_id,
-            'drift_status': drift_status,
-            'severity': severity,
-            'action': action,
-            'confidence': 0.5,
-            'reasoning': f"Fallback evaluation due to error: {e}",
-            'requires_retraining': action in ['incremental_retrain', 'full_retrain'],
+            'overall_drift_status': 'evaluation_error',
+            'action': 'continue_monitoring',
+            'confidence': 0.0,
+            'reasoning': f'Evaluation error: {str(e)}',
             'error': str(e)
         }
 
-def parse_drift_metrics_from_output(command_output: str) -> dict:
+def sophisticated_branching_decision(**kwargs):
     """
-    Parse drift metrics from monitor_drift.py command output
+    Enhanced branching logic with sophisticated decision making
     """
-    metrics = {
-        'dataset_drift_score': 0.0,
-        'feature_drift_count': 0,
-        'total_features': 1,
-        'drift_confidence_score': 0.5
+    evaluation_result = kwargs['ti'].xcom_pull(task_ids='comprehensive_drift_evaluation')
+    
+    if not evaluation_result:
+        logging.error("No evaluation result available for branching decision")
+        return 'monitoring_error_handler'
+    
+    action = evaluation_result.get('action', 'continue_monitoring')
+    confidence = evaluation_result.get('confidence', 0.0)
+    overall_status = evaluation_result.get('overall_drift_status', 'unknown')
+    
+    logging.info(f"Sophisticated branching decision: status={overall_status}, action={action}, confidence={confidence:.3f}")
+    
+    # Enhanced action mapping with error handling
+    action_mapping = {
+        'continue_monitoring': 'no_drift_continue_monitoring',
+        'log_and_monitor': 'minor_drift_enhanced_logging', 
+        'incremental_retrain': 'moderate_drift_trigger_retraining',
+        'full_retrain': 'major_drift_trigger_retraining',
+        'architecture_review': 'concept_drift_architecture_alert'
     }
     
-    try:
-        lines = command_output.split('\n')
-        for line in lines:
-            if 'Dataset drift score:' in line:
-                metrics['dataset_drift_score'] = float(line.split(':')[-1].strip())
-            elif 'Features with drift:' in line:
-                metrics['feature_drift_count'] = int(line.split(':')[-1].strip().split()[0])
-            elif 'Total features:' in line:
-                metrics['total_features'] = int(line.split(':')[-1].strip())
-            elif 'Drift confidence:' in line:
-                metrics['drift_confidence_score'] = float(line.split(':')[-1].strip())
-    except Exception as e:
-        logging.warning(f"Error parsing drift metrics: {e}")
+    mapped_task = action_mapping.get(action, 'no_drift_continue_monitoring')
     
-    return metrics
+    # Additional validation for high-confidence decisions
+    if confidence > 0.8 and action in ['incremental_retrain', 'full_retrain']:
+        logging.info(f"High-confidence drift decision: {action} with confidence {confidence:.3f}")
+    
+    return mapped_task
 
-def get_last_retraining_timestamp() -> float:
+def system_health_monitoring(**kwargs):
     """
-    Get timestamp of last retraining event from MLflow
+    Comprehensive system health monitoring and alerting
     """
+    logging.info("Performing comprehensive system health monitoring...")
+    
     try:
+        # Check MLflow connectivity
         import mlflow
         mlflow.set_tracking_uri(env_vars['MLFLOW_TRACKING_URI'])
         
-        # Search for recent training runs
-        experiment = mlflow.get_experiment_by_name('HealthPredict_Training_HPO_Airflow')
-        if experiment:
-            runs = mlflow.search_runs(
-                experiment_ids=[experiment.experiment_id],
-                order_by=["start_time DESC"],
-                max_results=1
+        # Verify experiments exist
+        try:
+            drift_experiment = mlflow.get_experiment_by_name(env_vars['DRIFT_MONITORING_EXPERIMENT'])
+            training_experiment = mlflow.get_experiment_by_name('HealthPredict_Training_HPO_Airflow')
+            
+            mlflow_status = "healthy"
+            logging.info("MLflow connectivity verified")
+        except Exception as e:
+            mlflow_status = f"error: {str(e)}"
+            logging.error(f"MLflow connectivity issues: {str(e)}")
+        
+        # Check S3 connectivity
+        try:
+            s3_client = boto3.client('s3')
+            s3_client.head_bucket(Bucket=env_vars['S3_BUCKET_NAME'])
+            s3_status = "healthy"
+            logging.info("S3 connectivity verified")
+        except Exception as e:
+            s3_status = f"error: {str(e)}"
+            logging.error(f"S3 connectivity issues: {str(e)}")
+        
+        # Check batch processing backlog
+        try:
+            response = s3_client.list_objects_v2(
+                Bucket=env_vars['S3_BUCKET_NAME'],
+                Prefix=f"{env_vars['DRIFT_BATCH_DATA_S3_PREFIX']}/",
+                MaxKeys=env_vars['BATCH_PROCESSING_BACKLOG_LIMIT'] + 5
             )
-            if not runs.empty:
-                return runs.iloc[0]['start_time'].timestamp()
+            
+            batch_count = len(response.get('Contents', []))
+            backlog_status = "healthy" if batch_count <= env_vars['BATCH_PROCESSING_BACKLOG_LIMIT'] else "backlog_alert"
+            
+            logging.info(f"Batch processing backlog: {batch_count} batches")
+        except Exception as e:
+            backlog_status = f"error: {str(e)}"
+            logging.error(f"Batch backlog check failed: {str(e)}")
+        
+        # Create system health report
+        health_report = {
+            'monitoring_timestamp': kwargs['execution_date'].isoformat(),
+            'mlflow_status': mlflow_status,
+            's3_status': s3_status,
+            'batch_backlog_status': backlog_status,
+            'system_overall_health': 'healthy' if all(
+                status == 'healthy' for status in [mlflow_status, s3_status, backlog_status]
+            ) else 'degraded'
+        }
+        
+        logging.info(f"System health monitoring complete: {health_report['system_overall_health']}")
+        
+        return health_report
+        
     except Exception as e:
-        logging.warning(f"Error getting last retraining timestamp: {e}")
+        logging.error(f"System health monitoring failed: {str(e)}")
+        return {
+            'monitoring_timestamp': kwargs['execution_date'].isoformat(),
+            'system_overall_health': 'critical',
+            'error': str(e)
+        }
+
+# ====================
+# TASK DEFINITIONS
+# ====================
+
+# Task Group: Data Batch Management
+with TaskGroup("batch_management", dag=dag) as batch_management_group:
     
-    return 0.0
-
-def get_consecutive_drift_count() -> int:
-    """
-    Get count of consecutive drift events (simplified implementation)
-    """
-    # TODO: Implement proper drift history tracking
-    # For now, return 0 to avoid unnecessary escalations
-    return 0
-
-def decide_drift_response(**kwargs):
-    """
-    Enhanced branching function with graduated response logic
-    """
-    drift_evaluation = kwargs['ti'].xcom_pull(task_ids='evaluate_drift_severity')
+    # Create simulation batch with enhanced features
+    create_sim_batch = PythonOperator(
+        task_id='create_simulation_batch',
+        python_callable=create_simulation_batch,
+        retries=2,
+        retry_delay=timedelta(minutes=1),
+    )
     
-    if not drift_evaluation:
-        logging.error("No drift evaluation information available")
-        return 'no_drift_continue_monitoring'
+    # System health monitoring
+    health_check = PythonOperator(
+        task_id='system_health_monitoring',  
+        python_callable=system_health_monitoring,
+        retries=1,
+        retry_delay=timedelta(seconds=30),
+    )
+
+# Task Group: Parallel Drift Detection
+with TaskGroup("drift_detection_parallel", dag=dag) as drift_detection_group:
     
-    action = drift_evaluation.get('action', 'continue_monitoring')
-    severity = drift_evaluation.get('severity', 'none')
+    # Parallel drift detection for simulation batch
+    parallel_drift_sim = PythonOperator(
+        task_id='parallel_drift_detection_sim',
+        python_callable=lambda **kwargs: parallel_drift_detection(
+            kwargs['ti'].xcom_pull(task_ids='batch_management.create_simulation_batch'), 
+            **kwargs
+        ),
+        retries=2,
+        retry_delay=timedelta(minutes=1),
+    )
+
+# Task Group: Comprehensive Analysis
+with TaskGroup("drift_analysis", dag=dag) as drift_analysis_group:
     
-    logging.info(f"Graduated drift decision: severity={severity}, action={action}")
+    # Comprehensive drift evaluation
+    comprehensive_eval = PythonOperator(
+        task_id='comprehensive_drift_evaluation',
+        python_callable=comprehensive_drift_evaluation,
+        retries=1,
+        retry_delay=timedelta(seconds=30),
+    )
     
-    # Map graduated response actions to DAG tasks
-    if action == 'continue_monitoring':
-        return 'no_drift_continue_monitoring'
-    elif action == 'log_and_monitor':
-        return 'minor_drift_log_and_monitor' 
-    elif action in ['incremental_retrain', 'full_retrain']:
-        return 'drift_trigger_retraining'
-    elif action == 'architecture_review':
-        return 'concept_drift_alert'
-    else:
-        # For unknown states, default to monitoring
-        logging.warning(f"Unknown action '{action}', defaulting to monitoring")
-        return 'no_drift_continue_monitoring'
+    # Sophisticated branching decision
+    sophisticated_branch = BranchPythonOperator(
+        task_id='sophisticated_branching_decision',
+        python_callable=sophisticated_branching_decision,
+        retries=1,
+        retry_delay=timedelta(seconds=30),
+    )
 
-# Task 1: Simulate new data batch arrival
-simulate_data_batch = PythonOperator(
-    task_id='simulate_data_batch',
-    python_callable=simulate_new_data_batch,
-    dag=dag,
-)
+# Task Group: Response Actions
+with TaskGroup("drift_responses", dag=dag) as drift_responses_group:
+    
+    # No drift response
+    no_drift_monitoring = PythonOperator(
+        task_id='no_drift_continue_monitoring',
+        python_callable=lambda **kwargs: logging.info(
+            f"No significant drift detected - continuing enhanced monitoring"
+        ),
+    )
+    
+    # Minor drift response with enhanced logging
+    minor_drift_logging = PythonOperator(
+        task_id='minor_drift_enhanced_logging',
+        python_callable=lambda **kwargs: logging.warning(
+            f"Minor drift detected - enhanced monitoring and logging activated"
+        ),
+    )
+    
+    # Moderate drift response
+    moderate_drift_retraining = TriggerDagRunOperator(
+        task_id='moderate_drift_trigger_retraining',
+        trigger_dag_id='health_predict_training_hpo',
+        conf={
+            'drift_triggered': True,
+            'drift_severity': 'moderate',
+            'triggered_by': 'comprehensive_drift_monitoring_v2',
+            'drift_context': '{{ ti.xcom_pull(task_ids="drift_analysis.comprehensive_drift_evaluation") }}',
+            'retraining_timestamp': '{{ ts }}'
+        },
+        wait_for_completion=False,
+        poke_interval=30,
+    )
+    
+    # Major drift response  
+    major_drift_retraining = TriggerDagRunOperator(
+        task_id='major_drift_trigger_retraining',
+        trigger_dag_id='health_predict_training_hpo', 
+        conf={
+            'drift_triggered': True,
+            'drift_severity': 'major',
+            'triggered_by': 'comprehensive_drift_monitoring_v2',
+            'drift_context': '{{ ti.xcom_pull(task_ids="drift_analysis.comprehensive_drift_evaluation") }}',
+            'retraining_timestamp': '{{ ts }}'
+        },
+        wait_for_completion=False,
+        poke_interval=30,
+    )
+    
+    # Concept drift alert
+    concept_drift_alert = PythonOperator(
+        task_id='concept_drift_architecture_alert',
+        python_callable=lambda **kwargs: logging.critical(
+            f"CONCEPT DRIFT DETECTED - Manual architecture review required immediately"
+        ),
+    )
+    
+    # Error handling
+    monitoring_error = PythonOperator(
+        task_id='monitoring_error_handler',
+        python_callable=lambda **kwargs: logging.error(
+            f"Drift monitoring encountered errors - review system health"
+        ),
+    )
 
-# Task 2: Run drift detection on the new batch
-run_drift_detection = PythonOperator(
-    task_id='run_drift_detection',
-    python_callable=detect_drift,
-    dag=dag,
-)
-
-# Task 3: Evaluate drift severity and determine response
-evaluate_drift = PythonOperator(
-    task_id='evaluate_drift_severity',
-    python_callable=evaluate_drift_severity,
-    dag=dag,
-)
-
-# Task 4: Branching decision based on drift severity
-drift_branch = BranchPythonOperator(
-    task_id='decide_drift_response',
-    python_callable=decide_drift_response,
-    dag=dag,
-)
-
-# Task 5: Graduated drift response actions
-no_drift_action = PythonOperator(
-    task_id='no_drift_continue_monitoring',
-    python_callable=lambda **kwargs: logging.info("No drift detected - continuing normal monitoring"),
-    dag=dag,
-)
-
-minor_drift_action = PythonOperator(
-    task_id='minor_drift_log_and_monitor',
-    python_callable=lambda **kwargs: logging.warning(
-        f"Minor drift detected in batch {kwargs['ti'].xcom_pull(task_ids='evaluate_drift_severity')['batch_id']} - "
-        f"increased monitoring activated"
-    ),
-    dag=dag,
-)
-
-concept_drift_action = PythonOperator(
-    task_id='concept_drift_alert',
-    python_callable=lambda **kwargs: logging.critical(
-        f"Concept drift detected in batch {kwargs['ti'].xcom_pull(task_ids='evaluate_drift_severity')['batch_id']} - "
-        f"manual architecture review required"
-    ),
-    dag=dag,
-)
-
-# Task 6: Enhanced retraining trigger with full drift context
-trigger_retraining = TriggerDagRunOperator(
-    task_id='drift_trigger_retraining',
-    trigger_dag_id='health_predict_training_hpo',
-    conf={
-        'drift_triggered': True,
-        'triggered_by': 'drift_monitoring',
-        'drift_batch_id': '{{ ti.xcom_pull(task_ids="evaluate_drift_severity")["batch_id"] }}',
-        'drift_severity': '{{ ti.xcom_pull(task_ids="evaluate_drift_severity")["severity"] }}',
-        'drift_action': '{{ ti.xcom_pull(task_ids="evaluate_drift_severity")["action"] }}',
-        'drift_confidence': '{{ ti.xcom_pull(task_ids="evaluate_drift_severity")["confidence"] }}',
-        'drift_reasoning': '{{ ti.xcom_pull(task_ids="evaluate_drift_severity")["reasoning"] }}',
-        'drift_batch_path': '{{ ti.xcom_pull(task_ids="simulate_data_batch")["s3_batch_path"] }}',
-        'drift_reports_path': '{{ ti.xcom_pull(task_ids="run_drift_detection")["reports_path"] }}',
-        'retraining_timestamp': '{{ ts }}'
-    },
-    wait_for_completion=False,  # Don't wait for training to complete
-    poke_interval=30,
-    dag=dag,
-)
-
-# Task 7: Log drift monitoring completion
-log_completion = PythonOperator(
-    task_id='log_monitoring_completion',
+# Final convergence task
+final_convergence = PythonOperator(
+    task_id='comprehensive_monitoring_completion',
     python_callable=lambda **kwargs: logging.info(
-        f"Drift monitoring cycle completed for batch: "
-        f"{kwargs['ti'].xcom_pull(task_ids='evaluate_drift_severity')['batch_id']}"
+        f"Comprehensive drift monitoring cycle completed successfully"
     ),
     trigger_rule=TriggerRule.NONE_FAILED_MIN_ONE_SUCCESS,
     dag=dag,
 )
 
-# Define task dependencies with graduated response branching
-simulate_data_batch >> run_drift_detection >> evaluate_drift >> drift_branch
+# ====================
+# TASK DEPENDENCIES
+# ====================
 
-# Graduated response branching paths
-drift_branch >> no_drift_action >> log_completion
-drift_branch >> minor_drift_action >> log_completion  
-drift_branch >> concept_drift_action >> log_completion
-drift_branch >> trigger_retraining >> log_completion 
+# Primary workflow
+batch_management_group >> drift_detection_group >> drift_analysis_group
+
+# Branching to response actions
+drift_analysis_group >> drift_responses_group
+
+# All response paths converge to completion
+drift_responses_group >> final_convergence 
