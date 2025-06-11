@@ -493,6 +493,7 @@ with TaskGroup("batch_management", dag=dag) as batch_management_group:
         python_callable=create_simulation_batch,
         retries=2,
         retry_delay=timedelta(minutes=1),
+        dag=dag,
     )
     
     # System health monitoring
@@ -501,6 +502,7 @@ with TaskGroup("batch_management", dag=dag) as batch_management_group:
         python_callable=system_health_monitoring,
         retries=1,
         retry_delay=timedelta(seconds=30),
+        dag=dag,
     )
 
 # Task Group: Parallel Drift Detection
@@ -515,6 +517,7 @@ with TaskGroup("drift_detection_parallel", dag=dag) as drift_detection_group:
         ),
         retries=2,
         retry_delay=timedelta(minutes=1),
+        dag=dag,
     )
 
 # Task Group: Comprehensive Analysis
@@ -526,6 +529,7 @@ with TaskGroup("drift_analysis", dag=dag) as drift_analysis_group:
         python_callable=comprehensive_drift_evaluation,
         retries=1,
         retry_delay=timedelta(seconds=30),
+        dag=dag,
     )
     
     # Sophisticated branching decision
@@ -534,6 +538,7 @@ with TaskGroup("drift_analysis", dag=dag) as drift_analysis_group:
         python_callable=sophisticated_branching_decision,
         retries=1,
         retry_delay=timedelta(seconds=30),
+        dag=dag,
     )
 
 # Task Group: Response Actions
@@ -545,6 +550,7 @@ with TaskGroup("drift_responses", dag=dag) as drift_responses_group:
         python_callable=lambda **kwargs: logging.info(
             f"No significant drift detected - continuing enhanced monitoring"
         ),
+        dag=dag,
     )
     
     # Minor drift response with enhanced logging
@@ -553,6 +559,7 @@ with TaskGroup("drift_responses", dag=dag) as drift_responses_group:
         python_callable=lambda **kwargs: logging.warning(
             f"Minor drift detected - enhanced monitoring and logging activated"
         ),
+        dag=dag,
     )
     
     # Moderate drift response
@@ -568,6 +575,7 @@ with TaskGroup("drift_responses", dag=dag) as drift_responses_group:
         },
         wait_for_completion=False,
         poke_interval=30,
+        dag=dag,
     )
     
     # Major drift response  
@@ -583,6 +591,7 @@ with TaskGroup("drift_responses", dag=dag) as drift_responses_group:
         },
         wait_for_completion=False,
         poke_interval=30,
+        dag=dag,
     )
     
     # Concept drift alert
@@ -591,6 +600,7 @@ with TaskGroup("drift_responses", dag=dag) as drift_responses_group:
         python_callable=lambda **kwargs: logging.critical(
             f"CONCEPT DRIFT DETECTED - Manual architecture review required immediately"
         ),
+        dag=dag,
     )
     
     # Error handling
@@ -599,6 +609,7 @@ with TaskGroup("drift_responses", dag=dag) as drift_responses_group:
         python_callable=lambda **kwargs: logging.error(
             f"Drift monitoring encountered errors - review system health"
         ),
+        dag=dag,
     )
 
 # Final convergence task
