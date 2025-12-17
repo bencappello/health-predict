@@ -4,7 +4,7 @@ import sys # Import sys for exit codes
 
 MLFLOW_TRACKING_URI = os.getenv('MLFLOW_TRACKING_URI', 'http://mlflow:5000')
 # EXPERIMENT_NAME = os.getenv('EXPERIMENT_NAME', 'HealthPredict_Training_HPO_Airflow') # Not directly used in this script but good for context
-MODEL_NAMES = ["HealthPredict_LogisticRegression", "HealthPredict_RandomForest", "HealthPredict_XGBoost"]
+MODEL_NAMES = ["HealthPredictModel", "HealthPredict_LogisticRegression", "HealthPredict_RandomForest", "HealthPredict_XGBoost"]
 
 print(f"Connecting to MLflow at {MLFLOW_TRACKING_URI}...")
 mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
