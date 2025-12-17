@@ -12,36 +12,36 @@ This system addresses the critical healthcare challenge of patient readmission, 
 
 ```mermaid
 graph TB
-    subgraph DataLayer["Data Layer"]
+    subgraph "Data Layer"
         S3[(S3 Storage)]
         RawData[Raw Data]
         ProcessedData[Processed Data]
         Models[Model Artifacts]
     end
     
-    subgraph Orchestration["Orchestration & Experiment Tracking"]
+    subgraph "Orchestration and Experiment Tracking"
         Airflow[Airflow Scheduler]
         MLflow[MLflow Tracking Server]
         Registry[MLflow Model Registry]
     end
     
-    subgraph Training["Training Pipeline"]
-        DriftDetect[Drift Detection - Evidently AI]
+    subgraph "Training Pipeline"
+        DriftDetect[Drift Detection]
         DataPrep[Data Preparation]
         RayTune[Ray Tune HPO]
         TrainingTask[XGBoost Training]
    end
     
-    subgraph Deployment["Deployment Pipeline"]
-        ModelPromotion[Model Promotion to Production]
+    subgraph "Deployment Pipeline"
+        ModelPromotion[Model Promotion]
         DockerBuild[Build Docker Image]
         ECR[Amazon ECR]
         K8sDeploy[Deploy to Kubernetes]
         Verify[Model Version Verification]
     end
     
-    subgraph Production["Production"]
-        K8s[Kubernetes Cluster - Minikube]
+    subgraph "Production"
+        K8s[Kubernetes Cluster]
         API[FastAPI Service]
         Users[End Users]
     end
@@ -577,10 +577,3 @@ This project is for educational and demonstration purposes.
 
 - Dataset: UCI Machine Learning Repository - Diabetes 130-US hospitals (1999-2008)
 - Original Study: Strack et al., "Impact of HbA1c Measurement on Hospital Readmission Rates"
-
----
-
-**Note:** This project demonstrates MLOps capabilities and is not intended for clinical use without proper medical validation and regulatory approval.
-
-**Author:** Developed as part of MLOps curriculum demonstration  
-**Last Updated:** December 2025
