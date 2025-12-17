@@ -67,9 +67,9 @@ graph TB
     Models --> S3
     ProcessedData --> S3
     
-    style DriftDetect fill:#fff4e6
-    style Verify fill:#e6f7ff
-    style API fill:#f6ffed
+    style DriftDetect fill:#fff4e6,stroke:#333,color:#000
+    style Verify fill:#e6f7ff,stroke:#333,color:#000
+    style API fill:#f6ffed,stroke:#333,color:#000
 ```
 
 
