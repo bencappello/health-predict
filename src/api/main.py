@@ -71,12 +71,14 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 
 # MLflow Configuration (Ideally, use environment variables)
 MLFLOW_TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI", "http://localhost:5000") # Default for local dev
-MODEL_NAME = os.getenv("MODEL_NAME", "HealthPredictModel") 
+# Default to the XGBoost model registered by the training DAG
+MODEL_NAME = os.getenv("MODEL_NAME", "HealthPredictModel")
 MODEL_STAGE = os.getenv("MODEL_STAGE", "Production")
 
 # Global variables for the model and preprocessor
 model = None
 preprocessor = None
+model_metadata = {}  # Store model version info for verification
 
 # --- Pydantic Models for Request and Response --- 
 class InferenceInput(BaseModel):
@@ -143,10 +145,21 @@ async def health_check():
     """
     return {"status": "healthy", "model_loaded": model is not None, "preprocessor_loaded": preprocessor is not None}
 
+# Model info endpoint for verification
+@app.get("/model-info", status_code=status.HTTP_200_OK)
+async def model_info():
+    """
+    Returns metadata about the currently loaded model for verification.
+    """
+    if not model_metadata:
+        raise HTTPException(status_code=503, detail="Model metadata not available. Model may not have loaded successfully.")
+    
+    return model_metadata
+
 # --- Startup and Shutdown Events (Model loading will go here) ---
 @app.on_event("startup")
 async def load_model_on_startup():
-    global model, preprocessor
+    global model, preprocessor, model_metadata
     try:
         mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
         model_uri = f"models:/{MODEL_NAME}/{MODEL_STAGE}"
@@ -157,12 +170,23 @@ async def load_model_on_startup():
         # Load the preprocessor from model artifacts
         try:
             from mlflow.tracking import MlflowClient
+            from datetime import datetime
             
             client = MlflowClient()
             
             # Get the model version details
             model_version = client.get_latest_versions(MODEL_NAME, stages=[MODEL_STAGE])[0]
             run_id = model_version.run_id
+            
+            # Store model metadata for verification endpoint
+            model_metadata = {
+                "model_name": MODEL_NAME,
+                "model_version": model_version.version,
+                "model_stage": MODEL_STAGE,
+                "run_id": run_id,
+                "loaded_at": datetime.utcnow().isoformat()
+            }
+            print(f"Model metadata: {model_metadata}")
             
             # Download the preprocessor artifact to a temporary location
             temp_dir = tempfile.mkdtemp()
