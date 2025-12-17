@@ -23,7 +23,7 @@ spec:
         - name: ecr-registry-key
       containers:
         - name: health-predict-api-container
-          image: 536474293413.dkr.ecr.us-east-1.amazonaws.com/health-predict-api:latest
+          image: 692133751630.dkr.ecr.us-east-1.amazonaws.com/health-predict-api:latest
           imagePullPolicy: Always
           ports:
             - containerPort: 8000
@@ -45,12 +45,11 @@ spec:
             failureThreshold: 3
           env:
             - name: MLFLOW_TRACKING_URI
-              value: "http://10.0.1.99:5000"
-            # Add other necessary environment variables like model name, stage if not hardcoded in API
-            # - name: MODEL_NAME
-            #   value: "HealthPredict_RandomForest"
-            # - name: MODEL_STAGE
-            #   value: "Production"
+              value: "http://10.0.1.32:5000"
+            - name: MODEL_NAME
+              value: "HealthPredictModel"
+            - name: MODEL_STAGE
+              value: "Production"
           resources:
             limits:
               cpu: "1"
