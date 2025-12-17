@@ -380,11 +380,11 @@ def sophisticated_branching_decision(**kwargs):
     """
     Enhanced branching logic with sophisticated decision making
     """
-    evaluation_result = kwargs['ti'].xcom_pull(task_ids='comprehensive_drift_evaluation')
+    evaluation_result = kwargs['ti'].xcom_pull(task_ids='drift_analysis.comprehensive_drift_evaluation')
     
     if not evaluation_result:
         logging.error("No evaluation result available for branching decision")
-        return 'monitoring_error_handler'
+        return 'drift_responses.monitoring_error_handler'
     
     action = evaluation_result.get('action', 'continue_monitoring')
     confidence = evaluation_result.get('confidence', 0.0)
@@ -392,16 +392,16 @@ def sophisticated_branching_decision(**kwargs):
     
     logging.info(f"Sophisticated branching decision: status={overall_status}, action={action}, confidence={confidence:.3f}")
     
-    # Enhanced action mapping with error handling
+    # Enhanced action mapping with error handling - MUST include TaskGroup prefix
     action_mapping = {
-        'continue_monitoring': 'no_drift_continue_monitoring',
-        'log_and_monitor': 'minor_drift_enhanced_logging', 
-        'incremental_retrain': 'moderate_drift_trigger_retraining',
-        'full_retrain': 'major_drift_trigger_retraining',
-        'architecture_review': 'concept_drift_architecture_alert'
+        'continue_monitoring': 'drift_responses.no_drift_continue_monitoring',
+        'log_and_monitor': 'drift_responses.minor_drift_enhanced_logging', 
+        'incremental_retrain': 'drift_responses.moderate_drift_trigger_retraining',
+        'full_retrain': 'drift_responses.major_drift_trigger_retraining',
+        'architecture_review': 'drift_responses.concept_drift_architecture_alert'
     }
     
-    mapped_task = action_mapping.get(action, 'no_drift_continue_monitoring')
+    mapped_task = action_mapping.get(action, 'drift_responses.no_drift_continue_monitoring')
     
     # Additional validation for high-confidence decisions
     if confidence > 0.8 and action in ['incremental_retrain', 'full_retrain']:

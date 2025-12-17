@@ -19,8 +19,10 @@ env_vars = {
     "AWS_ACCOUNT_ID": os.getenv("AWS_ACCOUNT_ID"),
     "AWS_REGION": os.getenv("AWS_DEFAULT_REGION", "us-east-1"), # Standardized to AWS_DEFAULT_REGION
     "ECR_REPO_NAME": "health-predict-api", # Used for tagging image
-    "ECR_REPOSITORY": os.getenv("ECR_REPOSITORY", "536474293413.dkr.ecr.us-east-1.amazonaws.com/health-predict-api"), # Used for full image URI
-    "MLFLOW_PROD_MODEL_NAME": "HealthPredict_RandomForest",
+    # Default to the current account ECR repo; override via .env if needed
+    "ECR_REPOSITORY": os.getenv("ECR_REPOSITORY", "692133751630.dkr.ecr.us-east-1.amazonaws.com/health-predict-api"),
+    # Generic model name that works for any algorithm type (XGBoost, RF, LR)
+    "MLFLOW_PROD_MODEL_NAME": "HealthPredictModel",
     "MLFLOW_PROD_MODEL_STAGE": "Production",
     "K8S_NAMESPACE": "default",
     "K8S_DEPLOYMENT_NAME": os.getenv("K8S_DEPLOYMENT_NAME", "health-predict-api-deployment"),

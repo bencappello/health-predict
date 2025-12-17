@@ -316,10 +316,17 @@ def find_and_register_best_model(**kwargs):
         else:
             model_description += "Standard training (no drift detected)."
         
+        # mlflow.register_model description arg not available in current MLflow version
         registered_model = mlflow.register_model(
             model_uri=model_uri,
-            name=target_registered_model_name,
-            description=model_description
+            name=target_registered_model_name
+        )
+        # Store description as a tag on the model version instead
+        client.set_model_version_tag(
+            name=registered_model.name,
+            version=registered_model.version,
+            key="model_description",
+            value=model_description
         )
         print(f"Registered model '{registered_model.name}' version {registered_model.version}.")
 
@@ -405,6 +412,8 @@ def test_api_before_deployment(**kwargs):
             "--network", "mlops-services_mlops_network",  # Connect to same network as MLflow
             "-p", "8001:8000",  # Use different port to avoid conflicts
             "-e", "MLFLOW_TRACKING_URI=http://mlflow:5000",  # Use service name from same network
+            "-e", "MODEL_NAME=HealthPredictModel",
+            "-e", "MODEL_STAGE=Production",
             f"{container_name}:test"
         ], capture_output=True, text=True, check=False)
         
@@ -425,7 +434,7 @@ def test_api_before_deployment(**kwargs):
                 if status_result.returncode == 0 and status_result.stdout.strip() == "running":
                     # Test if API is responding
                     health_result = subprocess.run([
-                        "curl", "-f", "http://localhost:8001/health"
+                        "curl", "-f", f"http://{container_name}:8000/health"
                     ], capture_output=True, text=True, check=False)
                     
                     if health_result.returncode == 0:
@@ -451,9 +460,9 @@ def test_api_before_deployment(**kwargs):
         
         # Set environment variables for tests
         test_env = os.environ.copy()
-        test_env["API_BASE_URL"] = "http://localhost:8001"
-        test_env["MINIKUBE_IP"] = "127.0.0.1"
-        test_env["K8S_NODE_PORT"] = "8001"
+        test_env["API_BASE_URL"] = f"http://{container_name}:8000"
+        test_env["MINIKUBE_IP"] = container_name
+        test_env["K8S_NODE_PORT"] = "8000"
         
         # Run tests against local container
         test_result = subprocess.run([
