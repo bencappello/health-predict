@@ -561,14 +561,47 @@ docker exec mlops-services-airflow-scheduler-1 env | grep MLFLOW
 
 ## Future Enhancements
 
-- **Advanced Drift Detection**: PSI, Wasserstein distance for more sensitive monitoring
-- **A/B Testing**: Automated comparison of model versions in production
-- **Model Explainability**: SHAP values for prediction interpretability
-- **Real-time Inference**: Streaming predictions with Kafka integration
-- **Multi-model Deployment**: Shadow mode testing with traffic splitting
-- **Automated Rollback**: Automatic reversion on performance degradation
-- **Production Dashboard**: Grafana monitoring for real-time metrics
-- **Federated Learning**: Multi-hospital collaborative learning
+While the current system implements a complete MLOps lifecycle with drift detection, automated retraining, and model version verification, the following enhancements could further improve the system:
+
+### 1. Advanced Drift Detection Metrics
+- **Current**: Evidently AI with KS-test for distribution drift
+- **Enhancement**: Add PSI (Population Stability Index) and Wasserstein distance for more sensitive drift detection
+- **Benefit**: Earlier detection of subtle distribution changes
+
+### 2. A/B Testing Framework
+- **Current**: Single production model deployment with regression guardrail
+- **Enhancement**: Deploy multiple model versions with traffic splitting
+- **Benefit**: Compare model performance in production with real traffic
+
+### 3. Model Explainability
+- **Current**: Black-box predictions
+- **Enhancement**: Integrate SHAP values for prediction interpretability
+- **Benefit**: Clinical staff can understand why the model predicts readmission risk
+
+### 4. Real-time Streaming Inference
+- **Current**: REST API with request/response pattern
+- **Enhancement**: Kafka integration for real-time event streaming
+- **Benefit**: Process patient data streams as they're generated in hospital systems
+
+### 5. Multi-region Deployment
+- **Current**: Single EC2 instance with Minikube
+- **Enhancement**: Multi-region Kubernetes (EKS) with global load balancing
+- **Benefit**: High availability and reduced latency for distributed hospitals
+
+### 6. Automated Rollback on Regression
+- **Current**: Manual intervention if deployed model underperforms
+- **Enhancement**: Automated rollback triggered by production monitoring metrics
+- **Benefit**: Faster recovery from bad deployments
+
+### 7. Production Monitoring Dashboard
+- **Current**: MLflow UI and Airflow logs
+- **Enhancement**: Grafana dashboard with real-time metrics, alerts, and SLA tracking
+- **Benefit**: Better operational visibility and proactive issue detection
+
+### 8. Feature Store Integration
+- **Current**: Feature engineering in training pipeline
+- **Enhancement**: Dedicated feature store (e.g., Feast) for feature versioning and serving
+- **Benefit**: Consistent features between training and inference, feature reusability
 
 ## License
 
