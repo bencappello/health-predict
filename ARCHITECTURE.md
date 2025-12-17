@@ -14,15 +14,15 @@ graph TB
         ECR[Amazon ECR]
     end
     
-    subgraph "EC2 MLOps Services"
+    subgraph "EC2: MLOps Services"
         subgraph "Docker Compose Network"
-            Airflow[Airflow Scheduler and Webserver]
+            Airflow[Airflow - Scheduler + Webserver]
             ML[MLflow Server]
             PG[(PostgreSQL)]
             Jupyter[JupyterLab]
         end
         
-        subgraph "Kubernetes Minikube"
+        subgraph "Kubernetes - Minikube"
             K8sDeploy[Deployment]
             K8sSvc[Service NodePort]
             Pods[API Pods]
