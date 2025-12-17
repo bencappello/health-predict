@@ -12,36 +12,36 @@ This system addresses the critical healthcare challenge of patient readmission, 
 
 ```mermaid
 graph TB
-    subgraph "Data Layer"
+    subgraph DataLayer["Data Layer"]
         S3[(S3 Storage)]
         RawData[Raw Data]
         ProcessedData[Processed Data]
         Models[Model Artifacts]
     end
     
-    subgraph "Orchestration & Experiment Tracking"
+    subgraph Orchestration["Orchestration & Experiment Tracking"]
         Airflow[Airflow Scheduler]
         MLflow[MLflow Tracking Server]
         Registry[MLflow Model Registry]
     end
     
-    subgraph "Training Pipeline"
-        DriftDetect[Drift Detection<br/>Evidently AI]
+    subgraph Training["Training Pipeline"]
+        DriftDetect[Drift Detection - Evidently AI]
         DataPrep[Data Preparation]
         RayTune[Ray Tune HPO]
-        Training[XGBoost Training]
+        TrainingTask[XGBoost Training]
    end
     
-    subgraph "Deployment Pipeline"
-        ModelPromotion[Model Promotion<br/>to Production]
+    subgraph Deployment["Deployment Pipeline"]
+        ModelPromotion[Model Promotion to Production]
         DockerBuild[Build Docker Image]
         ECR[Amazon ECR]
         K8sDeploy[Deploy to Kubernetes]
-        Verify[Model Version<br/>Verification]
+        Verify[Model Version Verification]
     end
     
-    subgraph "Production"
-        K8s[Kubernetes Cluster<br/>Minikube]
+    subgraph Production["Production"]
+        K8s[Kubernetes Cluster - Minikube]
         API[FastAPI Service]
         Users[End Users]
     end
@@ -51,8 +51,8 @@ graph TB
     Airflow --> DriftDetect
     DriftDetect --> DataPrep
     DataPrep --> RayTune
-    RayTune --> Training
-    Training --> MLflow
+    RayTune --> TrainingTask
+    TrainingTask --> MLflow
     MLflow --> Registry
     Registry --> ModelPromotion
     ModelPromotion --> DockerBuild
@@ -63,7 +63,7 @@ graph TB
     Verify --> API
     API --> Users
     
-    Training --> Models
+    TrainingTask --> Models
     Models --> S3
     ProcessedData --> S3
     
@@ -71,6 +71,7 @@ graph TB
     style Verify fill:#e6f7ff
     style API fill:#f6ffed
 ```
+
 
 ### Architecture Components
 

@@ -8,21 +8,21 @@ This document provides detailed technical architecture and implementation detail
 
 ```mermaid
 graph TB
-    subgraph "AWS Cloud"
+    subgraph AWS["AWS Cloud"]
         S3[(S3 Bucket)]
         EC2[EC2 Instance]
         ECR[Amazon ECR]
     end
     
-    subgraph "EC2: MLOps Services"
-        subgraph "Docker Compose Network"
-            Airflow[Airflow<br/>Scheduler + Webserver]
+    subgraph EC2Services["EC2: MLOps Services"]
+        subgraph DockerNetwork["Docker Compose Network"]
+            Airflow[Airflow - Scheduler + Webserver]
             ML[MLflow Server]
             PG[(PostgreSQL)]
             Jupyter[JupyterLab]
         end
         
-        subgraph "Kubernetes (Minikube)"
+        subgraph K8sMinikube["Kubernetes - Minikube"]
             K8sDeploy[Deployment]
             K8sSvc[Service NodePort]
             Pods[API Pods]
@@ -43,6 +43,7 @@ graph TB
     style ML fill:#3498db
     style Pods fill:#e74c3c
 ```
+
 
 ## Component Architecture
 
