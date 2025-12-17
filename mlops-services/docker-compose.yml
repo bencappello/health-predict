@@ -172,6 +172,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       - /home/ubuntu/health-predict:/home/ubuntu/health-predict
       - /home/ubuntu/.kube/config_flattened:/home/airflow/.kube/config:ro
+      - /home/ubuntu/.minikube:/home/airflow/.minikube:ro
     command: airflow scheduler
     networks:
       - mlops_network
