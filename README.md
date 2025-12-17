@@ -11,65 +11,26 @@ This system addresses the critical healthcare challenge of patient readmission, 
 ## System Architecture
 
 ```mermaid
-graph TB
-    subgraph "Data Layer"
-        S3[(S3 Storage)]
-        RawData[Raw Data]
-        ProcessedData[Processed Data]
-        Models[Model Artifacts]
-    end
+flowchart TB
+    S3[("S3 Storage")]
+    Airflow["Airflow Scheduler"]
+    MLflow["MLflow Server"]
+    RayTune["Ray Tune HPO"]
+    Training["XGBoost Training"]
+    ECR["Amazon ECR"]
+    K8s["Kubernetes"]
+    API["FastAPI Service"]
+    Users["End Users"]
     
-    subgraph "Orchestration and Experiment Tracking"
-        Airflow[Airflow Scheduler]
-        MLflow[MLflow Tracking Server]
-        Registry[MLflow Model Registry]
-    end
-    
-    subgraph "Training Pipeline"
-        DriftDetect[Drift Detection]
-        DataPrep[Data Preparation]
-        RayTune[Ray Tune HPO]
-        TrainingTask[XGBoost Training]
-   end
-    
-    subgraph "Deployment Pipeline"
-        ModelPromotion[Model Promotion]
-        DockerBuild[Build Docker Image]
-        ECR[Amazon ECR]
-        K8sDeploy[Deploy to Kubernetes]
-        Verify[Model Version Verification]
-    end
-    
-    subgraph "Production"
-        K8s[Kubernetes Cluster]
-        API[FastAPI Service]
-        Users[End Users]
-    end
-    
-    RawData --> S3
     S3 --> Airflow
-    Airflow --> DriftDetect
-    DriftDetect --> DataPrep
-    DataPrep --> RayTune
-    RayTune --> TrainingTask
-    TrainingTask --> MLflow
-    MLflow --> Registry
-    Registry --> ModelPromotion
-    ModelPromotion --> DockerBuild
-    DockerBuild --> ECR
-    ECR --> K8sDeploy
-    K8sDeploy --> K8s
-    K8s --> Verify
-    Verify --> API
+    Airflow --> MLflow
+    Airflow --> RayTune
+    RayTune --> Training
+    Training --> MLflow
+    MLflow --> ECR
+    ECR --> K8s
+    K8s --> API
     API --> Users
-    
-    TrainingTask --> Models
-    Models --> S3
-    ProcessedData --> S3
-    
-    style DriftDetect fill:#fff4e6
-    style Verify fill:#e6f7ff
-    style API fill:#f6ffed
 ```
 
 
