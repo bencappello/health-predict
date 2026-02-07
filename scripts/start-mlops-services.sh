@@ -242,23 +242,18 @@ start_minikube() {
     # Wait for Minikube to be ready
     if ! wait_for_condition check_minikube_running "Minikube cluster" 15 10; then
         log_error "Failed to start Minikube"
-        log_info "Attempting to reset Minikube..."
-        minikube delete
-        minikube start --driver=docker --cpus=2 --memory=3900MB
-        
-        if ! wait_for_condition check_minikube_running "Minikube cluster (after reset)" 15 10; then
-            log_error "Failed to start Minikube even after reset"
+        log_info "Attempting full purge and recreate of Minikube..."
+        minikube delete --all --purge || true
+        minikube start --driver=docker --cpus=2 --memory=3900MB --force
+
+        if ! wait_for_condition check_minikube_running "Minikube cluster (after purge)" 15 10; then
+            log_error "Failed to start Minikube even after purge"
             exit 1
         fi
     fi
     
-    # Apply Kubernetes manifests if they exist
-    if [ -f "$PROJECT_ROOT/k8s/deployment.yaml" ]; then
-        log_info "Applying Kubernetes manifests..."
-        kubectl apply -f "$PROJECT_ROOT/k8s/"
-    fi
-    
-    # Ensure ECR authentication secret exists
+    # Ensure ECR authentication secret exists (must precede K8s manifests
+    # so the pod can pull its image immediately on creation)
     log_info "Checking ECR authentication setup..."
     if check_ecr_secret; then
         log_success "✓ ECR authentication secret already exists"
@@ -271,6 +266,12 @@ start_minikube() {
             log_warning "ECR image pulls may fail. You may need to create the secret manually:"
             log_warning "kubectl create secret docker-registry ecr-registry-key --docker-server=<ECR_SERVER> --docker-username=AWS --docker-password=\$(aws ecr get-login-password --region <REGION>)"
         fi
+    fi
+
+    # Apply Kubernetes manifests if they exist
+    if [ -f "$PROJECT_ROOT/k8s/deployment.yaml" ]; then
+        log_info "Applying Kubernetes manifests..."
+        kubectl apply -f "$PROJECT_ROOT/k8s/"
     fi
     
     log_success "Minikube is ready"

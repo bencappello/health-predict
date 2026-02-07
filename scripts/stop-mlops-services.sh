@@ -83,25 +83,34 @@ stop_minikube() {
         log_info "Keeping Minikube running as requested"
         return 0
     fi
-    
+
     log_info "Stopping Minikube..."
-    
-    # Check if Minikube is running
+
+    # Use 'minikube delete' instead of 'minikube stop' to fully remove the
+    # container. A stopped container retains a reference to its Docker network
+    # by internal ID. If that network is later pruned (or removed by any cleanup),
+    # the next 'minikube start' fails with "network <id> not found" and requires
+    # a full 'minikube delete --all --purge' to recover. Deleting up front avoids
+    # this entirely — minikube state (K8s deployments, secrets) is ephemeral and
+    # gets recreated by the start script anyway.
     if minikube status >/dev/null 2>&1; then
-        minikube stop
-        log_success "Minikube stopped"
+        minikube delete
+        log_success "Minikube deleted (will be recreated on next start)"
     else
-        log_info "Minikube is not running"
+        # Even if not running, there may be a stopped container with stale state
+        minikube delete >/dev/null 2>&1 || true
+        log_info "Minikube is not running (cleaned up any residual state)"
     fi
 }
 
 cleanup_networks() {
-    log_info "Cleaning up Docker networks..."
-    
-    # Remove unused networks
-    docker network prune -f >/dev/null 2>&1 || true
-    
-    log_success "Network cleanup completed"
+    # Intentionally NOT running 'docker network prune' here.
+    # Pruning removes networks that stopped containers still reference by ID,
+    # which causes "network not found" errors on the next start. Since we use
+    # 'minikube delete' (not stop) above, there are no orphaned networks to
+    # worry about — compose networks are removed by 'docker compose down' and
+    # minikube's network is removed by 'minikube delete'.
+    log_info "Network cleanup: skipped (handled by compose down + minikube delete)"
 }
 
 display_status() {
