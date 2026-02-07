@@ -146,6 +146,12 @@ This may need multiple attempts. Always stop docker-compose services first.
 ### verify_deployment Task
 This task (DAG line ~1028) does more than check rollout status — it also queries the deployed API's `/model-info` endpoint and verifies the model version matches what was promoted in MLflow. If the API is slow to start (readiness probe has 45s initial delay), the 3 retry attempts with 5s delays should cover it.
 
+## Git Commits
+
+- **Author**: All commits must be authored as `Ben Cappello <bencappello@gmail.com>` — never use any other name or email
+- **No Co-Authored-By**: Do NOT add `Co-Authored-By` trailers to commit messages. Every commit should appear as solely authored by Ben Cappello
+- Git config is already set: `user.name = "Ben Cappello"`, `user.email = "bencappello@gmail.com"`
+
 ## Conventions
 
 - The target variable is `readmitted_binary` (binary 0/1 derived from the original multi-class `readmitted` column)
