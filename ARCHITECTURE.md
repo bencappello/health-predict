@@ -528,6 +528,7 @@ Docker Compose Network: mlops_network (bridge)
 ├── Airflow Scheduler: airflow-scheduler-1
 ├── Airflow Webserver: airflow-webserver-1
 ├── MLflow Server: mlflow-1
+├── Dashboard: dashboard-1 (Streamlit monitoring)
 ├── PostgreSQL: postgres-1
 └── JupyterLab: jupyterlab-1
 
@@ -537,6 +538,7 @@ Minikube Network: minikube (bridge)
 Host Network:
 ├── Port 8080 → Airflow Webserver
 ├── Port 5000 → MLflow Server
+├── Port 8501 → Monitoring Dashboard (Streamlit)
 ├── Port 8888 → JupyterLab
 └── Port {minikube_ip}:31780 → API Service (NodePort)
 ```

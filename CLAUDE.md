@@ -41,6 +41,7 @@ Raw data on S3 → `split_data.py` creates initial train/val/test + numbered bat
 |------------|------|--------------------------------|
 | Airflow UI | 8080 | Credentials: admin/admin       |
 | MLflow     | 5000 | Experiment tracking & registry |
+| Dashboard  | 8501 | Streamlit monitoring dashboard |
 | JupyterLab | 8888 | Token in container logs        |
 | PostgreSQL | 5432 | Backing store for Airflow + MLflow |
 | API (K8s)  | 31780| After deployment via Minikube  |

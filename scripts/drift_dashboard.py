@@ -1,481 +1,514 @@
 #!/usr/bin/env python3
 """
-Drift Monitoring Dashboard for Health Predict MLOps Pipeline
+Health Predict - Comprehensive Monitoring Dashboard
 
-This script creates interactive visualizations for drift monitoring results,
-including feature-level drift analysis, trend analysis, and concept drift monitoring.
+Streamlit dashboard pulling real data from MLflow and the live API,
+covering drift detection, model performance, training history,
+and deployment status.
 
 Usage:
-    streamlit run scripts/drift_dashboard.py
-    
-    Or as a standalone script:
-    python scripts/drift_dashboard.py --mlflow_tracking_uri http://mlflow:5000
+    streamlit run scripts/drift_dashboard.py --server.port=8501
 """
 
 import streamlit as st
 import pandas as pd
-import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 import mlflow
-import mlflow.tracking
-from datetime import datetime, timedelta
-import argparse
-import sys
+from mlflow.tracking import MlflowClient
+import requests
+from datetime import datetime
 import os
-from typing import Dict, List, Optional
 import warnings
-warnings.filterwarnings('ignore')
 
-# Configure page
+warnings.filterwarnings("ignore")
+
+# ---------------------------------------------------------------------------
+# Page config
+# ---------------------------------------------------------------------------
 st.set_page_config(
-    page_title="Health Predict - Drift Monitoring Dashboard",
-    page_icon="📊",
+    page_title="Health Predict - Monitoring Dashboard",
+    page_icon="🏥",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="expanded",
 )
 
-def load_drift_experiments(tracking_uri: str, experiment_name: str = "HealthPredict_Drift_Monitoring") -> pd.DataFrame:
-    """Load drift monitoring experiments from MLflow."""
+DRIFT_THRESHOLD = 0.30
+REGRESSION_THRESHOLD = -0.02
+MODEL_NAME = "HealthPredictModel"
+DRIFT_EXPERIMENT = "HealthPredict_Drift_Monitoring"
+TRAINING_EXPERIMENT = "HealthPredict_Training_HPO_Airflow"
+
+# ---------------------------------------------------------------------------
+# Data loading helpers
+# ---------------------------------------------------------------------------
+
+
+@st.cache_data(ttl=60)
+def load_drift_data(tracking_uri: str) -> pd.DataFrame:
+    """Load drift monitoring runs from MLflow."""
     try:
         mlflow.set_tracking_uri(tracking_uri)
-        experiment = mlflow.get_experiment_by_name(experiment_name)
-        
+        experiment = mlflow.get_experiment_by_name(DRIFT_EXPERIMENT)
         if experiment is None:
-            st.error(f"Experiment '{experiment_name}' not found in MLflow")
             return pd.DataFrame()
-        
-        # Get all runs from the experiment
         runs = mlflow.search_runs(
             experiment_ids=[experiment.experiment_id],
             order_by=["start_time DESC"],
-            max_results=100
+            max_results=100,
         )
-        
         if runs.empty:
-            st.warning("No drift monitoring runs found")
             return pd.DataFrame()
-        
-        # Clean up column names (remove 'metrics.' and 'params.' prefixes)
-        runs.columns = [col.replace('metrics.', '').replace('params.', '') for col in runs.columns]
-        
         return runs
-        
-    except Exception as e:
-        st.error(f"Error loading experiments: {e}")
+    except Exception:
         return pd.DataFrame()
 
 
-def create_drift_trend_chart(df: pd.DataFrame) -> go.Figure:
-    """Create a trend chart showing drift metrics over time."""
-    fig = make_subplots(
-        rows=2, cols=2,
-        subplot_titles=('Evidently Drift Share', 'Statistical Drift Share', 
-                       'Consensus Drift Detection', 'Confidence Score'),
-        specs=[[{"secondary_y": False}, {"secondary_y": False}],
-               [{"secondary_y": False}, {"secondary_y": False}]]
-    )
-    
-    # Convert start_time to datetime if it's not already
-    if 'start_time' in df.columns:
-        df['start_time'] = pd.to_datetime(df['start_time'])
-        x_axis = df['start_time']
-    else:
-        x_axis = range(len(df))
-    
-    # Evidently drift share
-    if 'evidently_drift_share' in df.columns:
-        fig.add_trace(
-            go.Scatter(x=x_axis, y=df['evidently_drift_share'], 
-                      name='Evidently Drift Share', line=dict(color='blue')),
-            row=1, col=1
-        )
-    
-    # Statistical drift share
-    if 'statistical_drift_share' in df.columns:
-        fig.add_trace(
-            go.Scatter(x=x_axis, y=df['statistical_drift_share'], 
-                      name='Statistical Drift Share', line=dict(color='red')),
-            row=1, col=2
-        )
-    
-    # Consensus drift detection (binary)
-    if 'consensus_drift_detected' in df.columns:
-        fig.add_trace(
-            go.Scatter(x=x_axis, y=df['consensus_drift_detected'], 
-                      name='Consensus Drift', mode='markers+lines', 
-                      line=dict(color='orange')),
-            row=2, col=1
-        )
-    
-    # Confidence score
-    if 'confidence_score' in df.columns:
-        fig.add_trace(
-            go.Scatter(x=x_axis, y=df['confidence_score'], 
-                      name='Confidence Score', line=dict(color='green')),
-            row=2, col=2
-        )
-    
-    fig.update_layout(
-        title="Drift Monitoring Trends Over Time",
-        height=600,
-        showlegend=False
-    )
-    
-    return fig
-
-
-def create_drift_methods_comparison(df: pd.DataFrame) -> go.Figure:
-    """Create a comparison chart of different drift detection methods."""
-    methods_data = []
-    
-    for idx, row in df.iterrows():
-        timestamp = row.get('start_time', idx)
-        
-        # Evidently AI
-        if 'evidently_dataset_drift' in row:
-            methods_data.append({
-                'timestamp': timestamp,
-                'method': 'Evidently AI',
-                'drift_detected': row['evidently_dataset_drift'],
-                'confidence': row.get('evidently_drift_share', 0)
-            })
-        
-        # KS Test
-        if 'ks_drift_count' in row and 'total_features_analyzed' in row:
-            ks_share = row['ks_drift_count'] / max(row['total_features_analyzed'], 1)
-            methods_data.append({
-                'timestamp': timestamp,
-                'method': 'KS Test',
-                'drift_detected': ks_share > 0.2,
-                'confidence': ks_share
-            })
-        
-        # PSI
-        if 'avg_psi' in row:
-            methods_data.append({
-                'timestamp': timestamp,
-                'method': 'PSI',
-                'drift_detected': row['avg_psi'] > 0.1,
-                'confidence': min(row['avg_psi'], 1.0)
-            })
-        
-        # Concept Drift
-        if 'concept_drift_detected' in row:
-            methods_data.append({
-                'timestamp': timestamp,
-                'method': 'Concept Drift',
-                'drift_detected': row['concept_drift_detected'],
-                'confidence': row.get('concept_drift_confidence', 0)
-            })
-    
-    if not methods_data:
-        return go.Figure()
-    
-    methods_df = pd.DataFrame(methods_data)
-    
-    fig = px.scatter(
-        methods_df, 
-        x='timestamp', 
-        y='method',
-        color='drift_detected',
-        size='confidence',
-        title="Drift Detection Methods Comparison",
-        color_discrete_map={True: 'red', False: 'green'},
-        labels={'drift_detected': 'Drift Detected', 'confidence': 'Confidence'}
-    )
-    
-    fig.update_layout(height=400)
-    return fig
-
-
-def create_feature_drift_heatmap(latest_run_data: Dict) -> go.Figure:
-    """Create a heatmap showing drift metrics for individual features."""
+@st.cache_data(ttl=60)
+def load_training_data(tracking_uri: str) -> pd.DataFrame:
+    """Load quality-gate runs (those with new_auc_test metric) from the training experiment."""
     try:
-        # This would need to be extracted from the feature_level_metrics
-        # For now, create a placeholder visualization
-        
-        # Sample feature names (in real implementation, extract from MLflow artifacts)
-        features = ['age_ordinal', 'time_in_hospital', 'num_medications', 'number_diagnoses', 
-                   'num_lab_procedures', 'num_procedures', 'discharge_disposition_id_ordinal']
-        
-        # Sample drift metrics (in real implementation, extract from stored metrics)
-        metrics = ['KS Statistic', 'PSI', 'Wasserstein Distance', 'JS Divergence']
-        
-        # Generate sample data (replace with actual data extraction)
-        np.random.seed(42)
-        drift_matrix = np.random.rand(len(features), len(metrics))
-        
-        fig = go.Figure(data=go.Heatmap(
-            z=drift_matrix,
-            x=metrics,
-            y=features,
-            colorscale='RdYlBu_r',
-            colorbar=dict(title="Drift Intensity")
-        ))
-        
-        fig.update_layout(
-            title="Feature-Level Drift Analysis",
-            xaxis_title="Drift Metrics",
-            yaxis_title="Features",
-            height=500
+        mlflow.set_tracking_uri(tracking_uri)
+        experiment = mlflow.get_experiment_by_name(TRAINING_EXPERIMENT)
+        if experiment is None:
+            return pd.DataFrame()
+        runs = mlflow.search_runs(
+            experiment_ids=[experiment.experiment_id],
+            filter_string="metrics.new_auc_test > 0",
+            order_by=["start_time DESC"],
+            max_results=100,
         )
-        
-        return fig
-        
-    except Exception as e:
-        st.error(f"Error creating feature drift heatmap: {e}")
-        return go.Figure()
+        if runs.empty:
+            return pd.DataFrame()
+        return runs
+    except Exception:
+        return pd.DataFrame()
 
 
-def create_concept_drift_analysis(df: pd.DataFrame) -> go.Figure:
-    """Create concept drift analysis visualization."""
-    if 'concept_drift_detected' not in df.columns:
-        return go.Figure()
-    
-    fig = make_subplots(
-        rows=2, cols=2,
-        subplot_titles=('Prediction Mean Shift', 'Model Accuracy Trend', 
-                       'Concept Drift Detection', 'Performance Degradation'),
-        specs=[[{"secondary_y": False}, {"secondary_y": False}],
-               [{"secondary_y": False}, {"secondary_y": False}]]
-    )
-    
-    x_axis = pd.to_datetime(df['start_time']) if 'start_time' in df.columns else range(len(df))
-    
-    # Prediction mean shift
-    if 'concept_prediction_mean_shift' in df.columns:
-        fig.add_trace(
-            go.Scatter(x=x_axis, y=df['concept_prediction_mean_shift'], 
-                      name='Prediction Mean Shift', line=dict(color='purple')),
-            row=1, col=1
+@st.cache_data(ttl=60)
+def load_hpo_trials(tracking_uri: str, parent_run_id: str) -> pd.DataFrame:
+    """Load child (HPO trial) runs for a given parent run."""
+    try:
+        mlflow.set_tracking_uri(tracking_uri)
+        experiment = mlflow.get_experiment_by_name(TRAINING_EXPERIMENT)
+        if experiment is None:
+            return pd.DataFrame()
+        runs = mlflow.search_runs(
+            experiment_ids=[experiment.experiment_id],
+            filter_string=f"tags.mlflow.parentRunId = '{parent_run_id}'",
+            order_by=["metrics.val_roc_auc_score DESC"],
+            max_results=50,
         )
-    
-    # Model accuracy trend
-    if 'concept_new_data_accuracy' in df.columns:
-        fig.add_trace(
-            go.Scatter(x=x_axis, y=df['concept_new_data_accuracy'], 
-                      name='New Data Accuracy', line=dict(color='blue')),
-            row=1, col=2
-        )
-    
-    # Concept drift detection
-    fig.add_trace(
-        go.Scatter(x=x_axis, y=df['concept_drift_detected'], 
-                  name='Concept Drift', mode='markers+lines', 
-                  line=dict(color='red')),
-        row=2, col=1
-    )
-    
-    # Performance degradation
-    if 'concept_performance_degradation' in df.columns:
-        fig.add_trace(
-            go.Scatter(x=x_axis, y=df['concept_performance_degradation'], 
-                      name='Performance Degradation', line=dict(color='orange')),
-            row=2, col=2
-        )
-    
-    fig.update_layout(
-        title="Concept Drift Analysis",
-        height=600,
-        showlegend=False
-    )
-    
-    return fig
+        return runs
+    except Exception:
+        return pd.DataFrame()
 
 
-def main_dashboard():
-    """Main dashboard function for Streamlit app."""
-    st.title("🏥 Health Predict - Drift Monitoring Dashboard")
-    st.markdown("Monitor data and concept drift in the Health Predict MLOps pipeline")
-    
-    # Sidebar configuration
-    st.sidebar.header("Configuration")
-    
-    # MLflow configuration
-    mlflow_uri = st.sidebar.text_input(
-        "MLflow Tracking URI", 
-        value="http://mlflow:5000",
-        help="URI of the MLflow tracking server"
-    )
-    
-    experiment_name = st.sidebar.text_input(
-        "Experiment Name",
-        value="HealthPredict_Drift_Monitoring",
-        help="Name of the drift monitoring experiment"
-    )
-    
-    # Time range selection
-    st.sidebar.subheader("Time Range")
-    time_range = st.sidebar.selectbox(
-        "Select time range",
-        ["Last 24 hours", "Last 7 days", "Last 30 days", "All time"]
-    )
-    
-    # Refresh button
-    if st.sidebar.button("🔄 Refresh Data"):
-        st.experimental_rerun()
-    
-    # Load data
-    with st.spinner("Loading drift monitoring data..."):
-        df = load_drift_experiments(mlflow_uri, experiment_name)
-    
-    if df.empty:
-        st.warning("No drift monitoring data available. Please run drift monitoring first.")
-        return
-    
-    # Filter by time range
-    if 'start_time' in df.columns and time_range != "All time":
-        df['start_time'] = pd.to_datetime(df['start_time'])
-        now = datetime.now()
-        
-        if time_range == "Last 24 hours":
-            cutoff = now - timedelta(hours=24)
-        elif time_range == "Last 7 days":
-            cutoff = now - timedelta(days=7)
-        elif time_range == "Last 30 days":
-            cutoff = now - timedelta(days=30)
-        
-        df = df[df['start_time'] >= cutoff]
-    
-    # Main metrics
-    st.header("📊 Current Drift Status")
-    
-    if not df.empty:
-        latest_run = df.iloc[0]
-        
-        col1, col2, col3, col4 = st.columns(4)
-        
-        with col1:
-            consensus_drift = latest_run.get('consensus_drift_detected', 0)
-            st.metric(
-                "Consensus Drift",
-                "DETECTED" if consensus_drift else "NOT DETECTED",
-                delta=None,
-                delta_color="inverse"
+@st.cache_data(ttl=60)
+def load_model_registry(tracking_uri: str) -> pd.DataFrame:
+    """Load model version history from the MLflow model registry."""
+    try:
+        mlflow.set_tracking_uri(tracking_uri)
+        client = MlflowClient(tracking_uri)
+        versions = client.search_model_versions(f"name='{MODEL_NAME}'")
+        if not versions:
+            return pd.DataFrame()
+        rows = []
+        for v in versions:
+            rows.append(
+                {
+                    "version": int(v.version),
+                    "stage": v.current_stage,
+                    "created": datetime.fromtimestamp(v.creation_timestamp / 1000).strftime(
+                        "%Y-%m-%d %H:%M:%S"
+                    ),
+                    "run_id": v.run_id,
+                    "status": v.status,
+                    "description": v.description or "",
+                }
             )
-        
-        with col2:
-            confidence = latest_run.get('confidence_score', 0)
-            st.metric(
-                "Confidence Score",
-                f"{confidence:.3f}",
-                delta=None
-            )
-        
-        with col3:
-            evidently_drift = latest_run.get('evidently_drift_share', 0)
-            st.metric(
-                "Evidently Drift Share",
-                f"{evidently_drift:.3f}",
-                delta=None
-            )
-        
-        with col4:
-            concept_drift = latest_run.get('concept_drift_detected', 0)
-            st.metric(
-                "Concept Drift",
-                "DETECTED" if concept_drift else "NOT DETECTED",
-                delta=None,
-                delta_color="inverse"
-            )
-    
-    # Drift trends
-    st.header("📈 Drift Trends")
-    
-    if len(df) > 1:
-        trend_fig = create_drift_trend_chart(df)
-        st.plotly_chart(trend_fig, use_container_width=True)
-        
-        # Methods comparison
-        st.header("🔍 Detection Methods Comparison")
-        methods_fig = create_drift_methods_comparison(df)
-        st.plotly_chart(methods_fig, use_container_width=True)
-        
-        # Concept drift analysis
-        if any('concept_' in col for col in df.columns):
-            st.header("🧠 Concept Drift Analysis")
-            concept_fig = create_concept_drift_analysis(df)
-            st.plotly_chart(concept_fig, use_container_width=True)
-    
-    # Feature-level analysis
-    st.header("🎯 Feature-Level Drift Analysis")
-    feature_fig = create_feature_drift_heatmap(latest_run.to_dict() if not df.empty else {})
-    st.plotly_chart(feature_fig, use_container_width=True)
-    
-    # Detailed data table
-    st.header("📋 Detailed Drift Monitoring Results")
-    
-    if st.checkbox("Show raw data"):
-        # Select relevant columns for display
-        display_cols = [col for col in df.columns if any(keyword in col.lower() for keyword in 
-                       ['drift', 'confidence', 'start_time', 'run_id', 'status'])]
-        
-        if display_cols:
-            st.dataframe(df[display_cols].head(20))
-        else:
-            st.dataframe(df.head(20))
-    
-    # Export functionality
-    st.header("💾 Export Data")
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        if st.button("📊 Download CSV"):
-            csv = df.to_csv(index=False)
-            st.download_button(
-                label="Download drift monitoring data as CSV",
-                data=csv,
-                file_name=f"drift_monitoring_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                mime="text/csv"
-            )
-    
-    with col2:
-        if st.button("📈 Generate Report"):
-            st.info("Report generation feature coming soon!")
+        return pd.DataFrame(rows).sort_values("version", ascending=False)
+    except Exception:
+        return pd.DataFrame()
 
 
-def standalone_mode():
-    """Run dashboard in standalone mode (non-Streamlit)."""
-    parser = argparse.ArgumentParser(description="Drift Monitoring Dashboard")
-    parser.add_argument('--mlflow_tracking_uri', default='http://mlflow:5000',
-                       help='MLflow tracking server URI')
-    parser.add_argument('--experiment_name', default='HealthPredict_Drift_Monitoring',
-                       help='MLflow experiment name')
-    parser.add_argument('--output_dir', default='drift_reports',
-                       help='Output directory for generated reports')
-    
-    args = parser.parse_args()
-    
-    print("Loading drift monitoring data...")
-    df = load_drift_experiments(args.mlflow_tracking_uri, args.experiment_name)
-    
-    if df.empty:
-        print("No drift monitoring data found.")
-        return
-    
-    print(f"Loaded {len(df)} drift monitoring runs")
-    print("\nLatest drift status:")
-    
-    if not df.empty:
-        latest = df.iloc[0]
-        print(f"  Consensus Drift: {'DETECTED' if latest.get('consensus_drift_detected', 0) else 'NOT DETECTED'}")
-        print(f"  Confidence Score: {latest.get('confidence_score', 0):.3f}")
-        print(f"  Evidently Drift Share: {latest.get('evidently_drift_share', 0):.3f}")
-        print(f"  Concept Drift: {'DETECTED' if latest.get('concept_drift_detected', 0) else 'NOT DETECTED'}")
-    
-    # Save summary report
-    os.makedirs(args.output_dir, exist_ok=True)
-    summary_file = os.path.join(args.output_dir, f"drift_summary_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
-    df.to_csv(summary_file, index=False)
-    print(f"\nDrift monitoring summary saved to: {summary_file}")
+def check_api_health(api_url: str) -> dict:
+    """Query the live prediction API for health and model info."""
+    result = {"api_status": "unavailable", "model_version": "N/A", "model_stage": "N/A", "loaded_at": "N/A"}
+    try:
+        r = requests.get(f"{api_url}/health", timeout=3)
+        if r.status_code == 200:
+            result["api_status"] = "healthy"
+    except Exception:
+        pass
+    try:
+        r = requests.get(f"{api_url}/model-info", timeout=3)
+        if r.status_code == 200:
+            info = r.json()
+            result["model_version"] = info.get("model_version", "N/A")
+            result["model_stage"] = info.get("model_stage", "N/A")
+            result["loaded_at"] = info.get("loaded_at", "N/A")
+    except Exception:
+        pass
+    return result
 
 
-if __name__ == "__main__":
-    # Check if running in Streamlit
-    if 'streamlit' in sys.modules:
-        main_dashboard()
+# ---------------------------------------------------------------------------
+# Helper: extract param/metric from MLflow DataFrame
+# ---------------------------------------------------------------------------
+
+def _col(df: pd.DataFrame, prefix: str, name: str):
+    """Return column values, trying prefixed and unprefixed names."""
+    for candidate in [f"{prefix}{name}", name]:
+        if candidate in df.columns:
+            return df[candidate]
+    return pd.Series([None] * len(df))
+
+
+# ---------------------------------------------------------------------------
+# Sidebar
+# ---------------------------------------------------------------------------
+
+st.sidebar.header("Configuration")
+mlflow_uri = st.sidebar.text_input(
+    "MLflow Tracking URI",
+    value=os.getenv("MLFLOW_TRACKING_URI", "http://mlflow:5000"),
+)
+api_url = st.sidebar.text_input(
+    "Prediction API URL",
+    value=os.getenv("API_URL", "http://health-predict-api:8000"),
+    help="The base URL for the deployed prediction API (K8s service or minikube IP).",
+)
+if st.sidebar.button("Refresh Data"):
+    st.cache_data.clear()
+
+st.sidebar.markdown("---")
+st.sidebar.markdown(
+    f"**Drift threshold:** {DRIFT_THRESHOLD}  \n"
+    f"**Regression threshold:** {REGRESSION_THRESHOLD}"
+)
+
+# ---------------------------------------------------------------------------
+# Title
+# ---------------------------------------------------------------------------
+st.title("Health Predict - Monitoring Dashboard")
+
+# ---------------------------------------------------------------------------
+# Load data
+# ---------------------------------------------------------------------------
+drift_df = load_drift_data(mlflow_uri)
+training_df = load_training_data(mlflow_uri)
+registry_df = load_model_registry(mlflow_uri)
+api_info = check_api_health(api_url)
+
+# ---------------------------------------------------------------------------
+# 1. System Status Bar
+# ---------------------------------------------------------------------------
+st.header("System Status")
+c1, c2, c3, c4 = st.columns(4)
+
+with c1:
+    is_healthy = api_info["api_status"] == "healthy"
+    st.metric("API Status", "Healthy" if is_healthy else "Unavailable")
+
+with c2:
+    st.metric("Current Model", f"v{api_info['model_version']} ({api_info['model_stage']})")
+
+with c3:
+    if not drift_df.empty:
+        latest_drift_share = _col(drift_df, "metrics.", "drift_share").iloc[0]
+        try:
+            latest_drift_share = float(latest_drift_share)
+            st.metric("Latest Drift Share", f"{latest_drift_share:.3f}")
+        except (TypeError, ValueError):
+            st.metric("Latest Drift Share", "N/A")
     else:
-        standalone_mode() 
+        st.metric("Latest Drift Share", "N/A")
+
+with c4:
+    if not drift_df.empty:
+        try:
+            gate = "RETRAIN" if float(latest_drift_share) >= DRIFT_THRESHOLD else "SKIP"
+        except Exception:
+            gate = "N/A"
+        st.metric("Drift Gate", gate)
+    else:
+        st.metric("Drift Gate", "N/A")
+
+st.markdown("---")
+
+# ---------------------------------------------------------------------------
+# Tabs
+# ---------------------------------------------------------------------------
+tab_drift, tab_perf, tab_training, tab_registry = st.tabs(
+    ["Drift Monitoring", "Model Performance", "Training History", "Model Registry"]
+)
+
+# ---------------------------------------------------------------------------
+# 2. Drift Monitoring
+# ---------------------------------------------------------------------------
+with tab_drift:
+    st.subheader("Drift Monitoring")
+    if drift_df.empty:
+        st.info("No drift monitoring data available. Run the pipeline to generate drift metrics.")
+    else:
+        # Extract relevant columns
+        batch_col = _col(drift_df, "params.", "batch_number")
+        drift_share_col = _col(drift_df, "metrics.", "drift_share")
+        n_drifted_col = _col(drift_df, "metrics.", "n_drifted_columns")
+        dataset_drift_col = _col(drift_df, "metrics.", "dataset_drift")
+
+        plot_df = pd.DataFrame(
+            {
+                "batch": pd.to_numeric(batch_col, errors="coerce"),
+                "drift_share": pd.to_numeric(drift_share_col, errors="coerce"),
+                "n_drifted": pd.to_numeric(n_drifted_col, errors="coerce"),
+                "dataset_drift": dataset_drift_col,
+                "timestamp": drift_df["start_time"] if "start_time" in drift_df.columns else None,
+            }
+        ).dropna(subset=["batch", "drift_share"]).sort_values("batch")
+
+        if not plot_df.empty:
+            # Drift share bar chart
+            st.markdown("#### Drift Share by Batch")
+            colors = ["red" if v >= DRIFT_THRESHOLD else "green" for v in plot_df["drift_share"]]
+            fig_share = go.Figure()
+            fig_share.add_trace(
+                go.Bar(
+                    x=plot_df["batch"].astype(int).astype(str),
+                    y=plot_df["drift_share"],
+                    marker_color=colors,
+                    name="Drift Share",
+                )
+            )
+            fig_share.add_hline(
+                y=DRIFT_THRESHOLD,
+                line_dash="dash",
+                line_color="orange",
+                annotation_text=f"Threshold ({DRIFT_THRESHOLD})",
+            )
+            fig_share.update_layout(
+                xaxis_title="Batch",
+                yaxis_title="Drift Share",
+                height=400,
+            )
+            st.plotly_chart(fig_share, use_container_width=True)
+
+            # Drifted features count
+            st.markdown("#### Drifted Features Count by Batch")
+            fig_count = go.Figure()
+            fig_count.add_trace(
+                go.Bar(
+                    x=plot_df["batch"].astype(int).astype(str),
+                    y=plot_df["n_drifted"],
+                    marker_color="steelblue",
+                    name="Drifted Columns",
+                )
+            )
+            fig_count.update_layout(
+                xaxis_title="Batch",
+                yaxis_title="Drifted Columns",
+                height=350,
+            )
+            st.plotly_chart(fig_count, use_container_width=True)
+
+            # Detail table
+            st.markdown("#### Drift Detail Table")
+            detail = plot_df[["batch", "drift_share", "n_drifted", "dataset_drift", "timestamp"]].copy()
+            detail["batch"] = detail["batch"].astype(int)
+            detail.columns = ["Batch", "Drift Share", "Drifted Columns", "Dataset Drift", "Timestamp"]
+            st.dataframe(detail, use_container_width=True, hide_index=True)
+        else:
+            st.warning("Drift data could not be parsed.")
+
+# ---------------------------------------------------------------------------
+# 3. Model Performance
+# ---------------------------------------------------------------------------
+with tab_perf:
+    st.subheader("Model Performance")
+    if training_df.empty:
+        st.info("No quality-gate evaluation data available. Run the pipeline with deployment to generate metrics.")
+    else:
+        batch_col = _col(training_df, "params.", "batch_number")
+        new_auc = _col(training_df, "metrics.", "new_auc_test")
+        new_f1 = _col(training_df, "metrics.", "new_f1_test")
+        prod_auc = _col(training_df, "metrics.", "prod_auc_test")
+        auc_imp = _col(training_df, "metrics.", "auc_improvement")
+        f1_imp = _col(training_df, "metrics.", "f1_improvement")
+
+        perf_df = pd.DataFrame(
+            {
+                "batch": pd.to_numeric(batch_col, errors="coerce"),
+                "new_auc": pd.to_numeric(new_auc, errors="coerce"),
+                "new_f1": pd.to_numeric(new_f1, errors="coerce"),
+                "prod_auc": pd.to_numeric(prod_auc, errors="coerce"),
+                "auc_improvement": pd.to_numeric(auc_imp, errors="coerce"),
+                "f1_improvement": pd.to_numeric(f1_imp, errors="coerce"),
+            }
+        ).dropna(subset=["batch", "new_auc"]).sort_values("batch")
+
+        if not perf_df.empty:
+            # AUC trend
+            st.markdown("#### AUC Trend Across Batches")
+            fig_auc = go.Figure()
+            fig_auc.add_trace(
+                go.Scatter(
+                    x=perf_df["batch"].astype(int).astype(str),
+                    y=perf_df["new_auc"],
+                    mode="lines+markers",
+                    name="New Model AUC",
+                    line=dict(color="blue"),
+                )
+            )
+            if perf_df["prod_auc"].notna().any():
+                fig_auc.add_trace(
+                    go.Scatter(
+                        x=perf_df["batch"].astype(int).astype(str),
+                        y=perf_df["prod_auc"],
+                        mode="lines+markers",
+                        name="Production AUC",
+                        line=dict(color="gray", dash="dot"),
+                    )
+                )
+            fig_auc.update_layout(xaxis_title="Batch", yaxis_title="AUC", height=400)
+            st.plotly_chart(fig_auc, use_container_width=True)
+
+            # AUC improvement bar chart
+            st.markdown("#### AUC Improvement per Batch")
+            imp_colors = [
+                "green" if v >= 0 else ("red" if v < REGRESSION_THRESHOLD else "orange")
+                for v in perf_df["auc_improvement"].fillna(0)
+            ]
+            fig_imp = go.Figure()
+            fig_imp.add_trace(
+                go.Bar(
+                    x=perf_df["batch"].astype(int).astype(str),
+                    y=perf_df["auc_improvement"],
+                    marker_color=imp_colors,
+                    name="AUC Improvement",
+                )
+            )
+            fig_imp.add_hline(
+                y=REGRESSION_THRESHOLD,
+                line_dash="dash",
+                line_color="red",
+                annotation_text=f"Regression Threshold ({REGRESSION_THRESHOLD})",
+            )
+            fig_imp.add_hline(y=0, line_color="black", line_width=0.5)
+            fig_imp.update_layout(xaxis_title="Batch", yaxis_title="AUC Improvement", height=350)
+            st.plotly_chart(fig_imp, use_container_width=True)
+
+            # Metrics comparison table
+            st.markdown("#### Metrics Comparison Table")
+            comp = perf_df[["batch", "new_auc", "new_f1", "prod_auc", "auc_improvement", "f1_improvement"]].copy()
+            comp["batch"] = comp["batch"].astype(int)
+            comp.columns = [
+                "Batch",
+                "New AUC",
+                "New F1",
+                "Prod AUC",
+                "AUC Improvement",
+                "F1 Improvement",
+            ]
+            st.dataframe(comp, use_container_width=True, hide_index=True)
+        else:
+            st.warning("Performance data could not be parsed.")
+
+# ---------------------------------------------------------------------------
+# 4. Training History
+# ---------------------------------------------------------------------------
+with tab_training:
+    st.subheader("Training History")
+    if training_df.empty:
+        st.info("No training data available.")
+    else:
+        batch_col = _col(training_df, "params.", "batch_number")
+        batches = pd.to_numeric(batch_col, errors="coerce").dropna().unique()
+        batches = sorted([int(b) for b in batches])
+
+        if batches:
+            selected_batch = st.selectbox("Select batch", batches, index=len(batches) - 1)
+
+            # Find the parent run for this batch
+            batch_mask = _col(training_df, "params.", "batch_number").astype(str) == str(selected_batch)
+            batch_runs = training_df[batch_mask]
+
+            if not batch_runs.empty:
+                parent_run_id = batch_runs.iloc[0]["run_id"]
+                st.markdown(f"**Parent run ID:** `{parent_run_id}`")
+
+                trials_df = load_hpo_trials(mlflow_uri, parent_run_id)
+                if not trials_df.empty:
+                    st.markdown("#### HPO Trials")
+                    # Select useful columns
+                    display_cols = []
+                    for col in trials_df.columns:
+                        if col.startswith("params.") and any(
+                            k in col
+                            for k in [
+                                "max_depth",
+                                "learning_rate",
+                                "n_estimators",
+                                "subsample",
+                                "colsample_bytree",
+                                "reg_alpha",
+                                "reg_lambda",
+                                "gamma",
+                                "min_child_weight",
+                                "model_type",
+                            ]
+                        ):
+                            display_cols.append(col)
+                    metric_cols = [
+                        c
+                        for c in trials_df.columns
+                        if c.startswith("metrics.") and "val_" in c
+                    ]
+                    show_cols = display_cols + metric_cols
+                    if show_cols:
+                        t = trials_df[show_cols].copy()
+                        t.columns = [c.replace("params.", "").replace("metrics.", "") for c in t.columns]
+                        st.dataframe(t, use_container_width=True, hide_index=True)
+                    else:
+                        st.dataframe(trials_df.head(20), use_container_width=True, hide_index=True)
+                else:
+                    st.info("No HPO trial (child) runs found for this batch.")
+
+            # Best model per batch summary
+            st.markdown("#### Best Model per Batch")
+            summary_rows = []
+            for b in batches:
+                mask = _col(training_df, "params.", "batch_number").astype(str) == str(b)
+                b_runs = training_df[mask]
+                if not b_runs.empty:
+                    best_auc_col = _col(b_runs, "metrics.", "new_auc_test")
+                    try:
+                        best_auc = float(best_auc_col.iloc[0])
+                    except (TypeError, ValueError):
+                        best_auc = None
+                    model_type = _col(b_runs, "params.", "model_type")
+                    mt = model_type.iloc[0] if not model_type.empty else "N/A"
+                    summary_rows.append({"Batch": int(b), "Best AUC (test)": best_auc, "Model Type": mt})
+            if summary_rows:
+                st.dataframe(pd.DataFrame(summary_rows), use_container_width=True, hide_index=True)
+        else:
+            st.warning("No batches found in training data.")
+
+# ---------------------------------------------------------------------------
+# 5. Model Registry
+# ---------------------------------------------------------------------------
+with tab_registry:
+    st.subheader("Model Registry")
+    if registry_df.empty:
+        st.info("No model versions found in the registry.")
+    else:
+        st.markdown(f"**Registered model:** `{MODEL_NAME}`")
+
+        # Highlight production row
+        prod = registry_df[registry_df["stage"] == "Production"]
+        if not prod.empty:
+            st.markdown("#### Current Production Model")
+            st.dataframe(prod, use_container_width=True, hide_index=True)
+
+        st.markdown("#### Version History")
+        st.dataframe(registry_df, use_container_width=True, hide_index=True)

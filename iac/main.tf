@@ -103,6 +103,14 @@ resource "aws_security_group" "ec2_sg" {
     cidr_blocks = ["${var.your_ip}/32"]
   }
 
+  ingress {
+    description = "Monitoring Dashboard (Streamlit)"
+    from_port   = 8501
+    to_port     = 8501
+    protocol    = "tcp"
+    cidr_blocks = ["${var.your_ip}/32"]
+  }
+
   egress {
     from_port   = 0
     to_port     = 0

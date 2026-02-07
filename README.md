@@ -45,6 +45,14 @@ Health Predict addresses this challenge by leveraging machine learning to predic
 - Automated health checks and readiness probes
 - **Model version verification** ensuring correct model deployment
 
+### ✅ Comprehensive Monitoring Dashboard
+- **Streamlit dashboard** (port 8501) with real-time MLflow integration
+- Drift monitoring trends with threshold visualization
+- Model performance tracking (AUC, F1) across batches
+- Training history with HPO trial details
+- Model registry version history and production model status
+- Live API health check and deployed model version
+
 ### ✅ Intelligent Monitoring & Retraining
 - **Drift-gated retraining**: Retraining only triggers when data drift is detected
 - Data drift detection with Evidently AI (KS-test for numeric, chi-squared for categorical features)
@@ -274,6 +282,7 @@ Check that all services are running:
 |---------|-----|-------------|
 | Airflow UI | http://localhost:8080 | admin / admin |
 | MLflow UI | http://localhost:5000 | - |
+| Monitoring Dashboard | http://localhost:8501 | - |
 | JupyterLab | http://localhost:8888 | token in logs |
 | API (after deploy) | http://$(minikube ip):31780 | - |
 | API Docs | http://$(minikube ip):31780/docs | - |

@@ -219,10 +219,20 @@ services:
       - mlflow
       - postgres
 
+  dashboard:
+    build:
+      context: ../
+      dockerfile: mlops-services/Dockerfile.dashboard
+    container_name: mlops-services-dashboard-1
+    restart: always
+    depends_on:
+      - mlflow
+    ports:
+      - "8501:8501"
+    environment:
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+    networks:
+      - mlops_network
+
 volumes:
   pgdata:
-
-# Removed the old networks alias
-# networks:
-#  default:
-#    name: mlops_network 
