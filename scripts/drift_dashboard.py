@@ -12,7 +12,6 @@ Usage:
 
 import streamlit as st
 import pandas as pd
-import plotly.express as px
 import plotly.graph_objects as go
 import mlflow
 from mlflow.tracking import MlflowClient
@@ -292,7 +291,7 @@ with tab_drift:
                 yaxis_title="Drift Share",
                 height=400,
             )
-            st.plotly_chart(fig_share, use_container_width=True)
+            st.plotly_chart(fig_share, width="stretch")
 
             # Drifted features count
             st.markdown("#### Drifted Features Count by Batch")
@@ -310,14 +309,14 @@ with tab_drift:
                 yaxis_title="Drifted Columns",
                 height=350,
             )
-            st.plotly_chart(fig_count, use_container_width=True)
+            st.plotly_chart(fig_count, width="stretch")
 
             # Detail table
             st.markdown("#### Drift Detail Table")
             detail = plot_df[["batch", "drift_share", "n_drifted", "dataset_drift", "timestamp"]].copy()
             detail["batch"] = detail["batch"].astype(int)
             detail.columns = ["Batch", "Drift Share", "Drifted Columns", "Dataset Drift", "Timestamp"]
-            st.dataframe(detail, use_container_width=True, hide_index=True)
+            st.dataframe(detail, width="stretch", hide_index=True)
         else:
             st.warning("Drift data could not be parsed.")
 
@@ -371,7 +370,7 @@ with tab_perf:
                     )
                 )
             fig_auc.update_layout(xaxis_title="Batch", yaxis_title="AUC", height=400)
-            st.plotly_chart(fig_auc, use_container_width=True)
+            st.plotly_chart(fig_auc, width="stretch")
 
             # AUC improvement bar chart
             st.markdown("#### AUC Improvement per Batch")
@@ -396,7 +395,7 @@ with tab_perf:
             )
             fig_imp.add_hline(y=0, line_color="black", line_width=0.5)
             fig_imp.update_layout(xaxis_title="Batch", yaxis_title="AUC Improvement", height=350)
-            st.plotly_chart(fig_imp, use_container_width=True)
+            st.plotly_chart(fig_imp, width="stretch")
 
             # Metrics comparison table
             st.markdown("#### Metrics Comparison Table")
@@ -410,7 +409,7 @@ with tab_perf:
                 "AUC Improvement",
                 "F1 Improvement",
             ]
-            st.dataframe(comp, use_container_width=True, hide_index=True)
+            st.dataframe(comp, width="stretch", hide_index=True)
         else:
             st.warning("Performance data could not be parsed.")
 
@@ -468,9 +467,9 @@ with tab_training:
                     if show_cols:
                         t = trials_df[show_cols].copy()
                         t.columns = [c.replace("params.", "").replace("metrics.", "") for c in t.columns]
-                        st.dataframe(t, use_container_width=True, hide_index=True)
+                        st.dataframe(t, width="stretch", hide_index=True)
                     else:
-                        st.dataframe(trials_df.head(20), use_container_width=True, hide_index=True)
+                        st.dataframe(trials_df.head(20), width="stretch", hide_index=True)
                 else:
                     st.info("No HPO trial (child) runs found for this batch.")
 
@@ -490,7 +489,7 @@ with tab_training:
                     mt = model_type.iloc[0] if not model_type.empty else "N/A"
                     summary_rows.append({"Batch": int(b), "Best AUC (test)": best_auc, "Model Type": mt})
             if summary_rows:
-                st.dataframe(pd.DataFrame(summary_rows), use_container_width=True, hide_index=True)
+                st.dataframe(pd.DataFrame(summary_rows), width="stretch", hide_index=True)
         else:
             st.warning("No batches found in training data.")
 
@@ -508,7 +507,7 @@ with tab_registry:
         prod = registry_df[registry_df["stage"] == "Production"]
         if not prod.empty:
             st.markdown("#### Current Production Model")
-            st.dataframe(prod, use_container_width=True, hide_index=True)
+            st.dataframe(prod, width="stretch", hide_index=True)
 
         st.markdown("#### Version History")
-        st.dataframe(registry_df, use_container_width=True, hide_index=True)
+        st.dataframe(registry_df, width="stretch", hide_index=True)

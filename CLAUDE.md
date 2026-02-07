@@ -136,6 +136,28 @@ docker exec mlops-services-airflow-scheduler-1 \
 - Airflow 2.8.1 does not have `airflow tasks logs` — use filesystem logs at `/opt/airflow/logs/dag_id=.../run_id=.../task_id=.../attempt=N.log`
 - Filter noisy output: append `2>&1 | grep -v -E "DeprecationWarning|FutureWarning|RemovedInAirflow"` to CLI commands
 
+### Docker-Compose v1 ContainerConfig Bug (CRITICAL)
+**NEVER run `docker-compose up -d <service>` without `--no-deps` when adding or rebuilding a single service.** Docker-compose v1 on this machine has a `KeyError: 'ContainerConfig'` bug that corrupts containers when it tries to recreate dependencies. This kills postgres, which takes down MLflow and Airflow.
+
+**Safe pattern for single-service operations:**
+```bash
+# Rebuild and restart ONE service without touching others:
+docker-compose up -d --no-deps --build dashboard
+
+# If you hit ContainerConfig anyway, force-remove the broken container first:
+docker rm -f <container_name>
+docker-compose up -d --no-deps <service>
+```
+
+**If postgres or multiple containers are corrupted (ContainerConfig errors on several services):**
+```bash
+docker-compose down          # Clean remove all containers
+docker-compose up -d         # Fresh start everything
+```
+This is safe — the `pgdata` volume persists across `down`/`up` so no data is lost.
+
+**Root cause:** docker-compose v1's `get_container_data_volumes` fails to read metadata from containers that were partially recreated. The `--no-deps` flag prevents compose from touching dependency containers, avoiding the bug entirely.
+
 ### Minikube Instability
 Minikube on this EC2 instance can be flaky. If the container dies during startup:
 ```bash
