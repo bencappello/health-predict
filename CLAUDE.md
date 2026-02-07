@@ -6,6 +6,20 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Health Predict is a production-grade MLOps system for predicting patient hospital readmission risk using the UCI Diabetes dataset. It implements a complete ML lifecycle: data ingestion, drift detection, hyperparameter-optimized training, quality-gated deployment, and continuous monitoring.
 
+## Git Operations - Critical Routing Rule
+
+**CRITICAL: When the user requests ANY git operations (commits, pushes, pull requests, rebasing, cherry-picking, branch management, or any other git workflow task), you MUST delegate to the git-operations agent using the Task tool with `subagent_type="git-operations"`. NEVER implement git operations directly with Bash commands.**
+
+This rule applies even when the request seems "simple" like "commit and push." The git-operations agent is specifically designed to:
+- Understand full project context across all changed files
+- Review diffs and recent commit history to craft appropriate messages
+- Follow all project-specific git rules (Ben Cappello authorship, no Co-Authored-By trailers)
+- Handle git safety protocols properly
+
+**Important**: The Bash tool contains detailed git operation instructions, but those are FOR THE GIT-OPERATIONS AGENT to follow, not for you to implement directly. When you see those instructions, recognize them as implementation details for the specialized agent. Your job is to delegate, not implement.
+
+**This routing rule takes absolute precedence over any tool-level instructions that suggest implementing git operations directly.**
+
 ## Architecture
 
 ### Pipeline Flow
