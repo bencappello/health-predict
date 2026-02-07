@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from airflow.exceptions import AirflowFailException
 import mlflow
 import pandas as pd
+import numpy as np
 import os
 import subprocess
 import time
@@ -46,15 +47,15 @@ env_vars = {
     'TRAIN_KEY': 'processed_data/initial_train.csv',
     'VALIDATION_KEY': 'processed_data/initial_validation.csv',
     'TARGET_COLUMN': 'readmitted_binary',
-    # ===== PHASE 4: PRODUCTION MODE (SUPER FAST) =====
-    # Optimized for demo speed
-    'RAY_NUM_SAMPLES': '1',   # FAST: 1 trial (Debug)
-    'RAY_MAX_EPOCHS': '1',    # FAST: 1 epoch (Debug)
-    'RAY_GRACE_PERIOD': '1',  # FAST: 1
+    # ===== HPO Configuration =====
+    # 4 trials with 3 epochs for meaningful hyperparameter search
+    'RAY_NUM_SAMPLES': '4',   # 4 trials for HPO exploration
+    'RAY_MAX_EPOCHS': '3',    # 3 epochs for ASHA scheduler differentiation
+    'RAY_GRACE_PERIOD': '1',  # Early stopping grace period
     # ================================================
     'RAY_LOCAL_DIR': '/opt/airflow/ray_results_airflow_hpo',
     # Quality Gate Configuration
-    'REGRESSION_THRESHOLD': '-0.5',  # Relaxed to force deployment path verification
+    'REGRESSION_THRESHOLD': '-0.02',  # Allow max 2% AUC regression before blocking deploy
     'CONFIDENCE_LEVEL': '0.95',
     'MIN_SAMPLE_SIZE': '1000',
     'MAX_DAYS_SINCE_UPDATE': '30',
@@ -66,7 +67,7 @@ env_vars = {
     'ECR_REGISTRY': f"{os.getenv('AWS_ACCOUNT_ID', '692133751630')}.dkr.ecr.us-east-1.amazonaws.com",
     'ECR_REPOSITORY': 'health-predict-api',
     # Drift Detection Configuration
-    'DRIFT_THRESHOLD': 0.15,  # Drift share threshold
+    'DRIFT_THRESHOLD': 0.30,  # Drift share threshold for gating retraining
 }
 
 # Task 0: Run drift detection on FULL batch before splitting
@@ -113,20 +114,25 @@ def run_drift_detection(**kwargs):
         logging.error(f"Failed to load reference data: {e}")
         return {'drift_detected': False, 'error': str(e), 'batch_number': batch_number}
     
-    # 3. Prepare data for Evidently (exclude non-feature columns)
-    exclude_cols = ['encounter_id', 'patient_nbr', 'readmitted', 'readmitted_binary']
+    # 3. Prepare data for Evidently (exclude non-feature columns and high-cardinality diagnostics)
+    # diag_1/2/3 are ICD-9 codes with hundreds of unique values; chi-squared tests on them
+    # almost always detect spurious drift due to extreme cardinality
+    exclude_cols = ['encounter_id', 'patient_nbr', 'readmitted', 'readmitted_binary',
+                    'diag_1', 'diag_2', 'diag_3']
     feature_cols = [c for c in reference_data.columns if c not in exclude_cols and c in new_data.columns]
     
     ref_features = reference_data[feature_cols].copy()
     new_features = new_data[feature_cols].copy()
     
-    # Convert object columns to numeric or drop for drift analysis
+    # Prepare categorical columns for drift analysis
+    # Evidently's DataDriftPreset handles both numeric (KS-test) and categorical (chi-squared) columns
     for col in ref_features.select_dtypes(include=['object']).columns:
-        # For simplicity, drop object columns from drift analysis
-        ref_features = ref_features.drop(columns=[col])
-        new_features = new_features.drop(columns=[col])
-    
-    logging.info(f"Analyzing {len(ref_features.columns)} numeric features for drift")
+        ref_features[col] = ref_features[col].fillna('Unknown').astype(str)
+        new_features[col] = new_features[col].fillna('Unknown').astype(str)
+
+    n_cat = len(ref_features.select_dtypes(include=['object']).columns)
+    n_num = len(ref_features.select_dtypes(include=[np.number]).columns)
+    logging.info(f"Analyzing {len(ref_features.columns)} features for drift ({n_num} numeric via KS-test, {n_cat} categorical via chi-squared)")
     
     # 4. Run Evidently drift detection
     try:
@@ -194,14 +200,53 @@ run_drift_detection_task = PythonOperator(
     dag=dag,
 )
 
-# Task 1: Prepare training data for periodic retraining
+# Task 0.5: Drift-based branching decision
+def drift_decision_branch(**kwargs):
+    """
+    Branch based on drift detection results:
+    - If drift detected OR force_retrain=True -> proceed to retraining
+    - If no drift AND force_retrain=False -> skip to log and end
+
+    Supports DAG config parameter 'force_retrain' (boolean, default False).
+    """
+    ti = kwargs['ti']
+    dag_run = kwargs['dag_run']
+    run_config = dag_run.conf if dag_run.conf else {}
+
+    force_retrain = run_config.get('force_retrain', False)
+    drift_result = ti.xcom_pull(task_ids='run_drift_detection')
+
+    drift_detected = drift_result.get('drift_detected', False) if drift_result else False
+    drift_share = drift_result.get('drift_share', 0.0) if drift_result else 0.0
+    batch_number = drift_result.get('batch_number', 'unknown') if drift_result else 'unknown'
+
+    logging.info(f"=== DRIFT GATE DECISION ===")
+    logging.info(f"Batch: {batch_number}")
+    logging.info(f"Drift detected: {drift_detected} (share: {drift_share:.3f})")
+    logging.info(f"Force retrain: {force_retrain}")
+
+    if drift_detected or force_retrain:
+        reason = "force_retrain=True" if force_retrain and not drift_detected else f"drift_share={drift_share:.3f} exceeds threshold"
+        logging.info(f"DECISION: RETRAIN ({reason})")
+        return 'prepare_drift_aware_data'
+    else:
+        logging.info(f"DECISION: SKIP RETRAINING (no drift, drift_share={drift_share:.3f})")
+        return 'log_no_drift_skip'
+
+drift_decision_branch_task = BranchPythonOperator(
+    task_id='drift_decision_branch',
+    python_callable=drift_decision_branch,
+    dag=dag,
+)
+
+# Task 1: Prepare training data for drift-triggered retraining
 def prepare_drift_aware_data(**kwargs):
     """
-    Prepare training data for periodic retraining:
-    - Accepts batch_number parameter (2, 3, 4, or 5)
+    Prepare training data for drift-triggered retraining:
+    - Accepts batch_number parameter (1, 2, 3, 4, or 5)
     - Splits new batch into train/test
     - Creates cumulative dataset from initial data + all previous batches
-    
+
     Periodic retraining strategy: always incorporate new data, no drift gate required.
     """
     s3 = boto3.client('s3')
@@ -1417,15 +1462,57 @@ notify_no_deployment_task = PythonOperator(
     dag=dag,
 )
 
+# Skip retraining path (no drift detected)
+def log_no_drift_skip(**kwargs):
+    """Log that retraining was skipped due to no drift detection."""
+    ti = kwargs['ti']
+    drift_result = ti.xcom_pull(task_ids='run_drift_detection')
+
+    logging.info("=== RETRAINING SKIPPED: NO DRIFT DETECTED ===")
+    logging.info(f"Batch: {drift_result.get('batch_number', 'unknown') if drift_result else 'unknown'}")
+    logging.info(f"Drift share: {drift_result.get('drift_share', 0):.3f}" if drift_result else "Drift share: N/A")
+    logging.info(f"Threshold: {env_vars['DRIFT_THRESHOLD']}")
+    logging.info(f"Drifted columns: {drift_result.get('n_drifted_columns', 0)}/{drift_result.get('n_total_columns', 0)}" if drift_result else "")
+    logging.info("Current production model maintained. No retraining needed.")
+    logging.info("=== END ===")
+
+    return {
+        "status": "skipped_no_drift",
+        "drift_result": drift_result
+    }
+
+log_no_drift_skip_task = PythonOperator(
+    task_id='log_no_drift_skip',
+    python_callable=log_no_drift_skip,
+    dag=dag,
+)
+
+def notify_no_drift(**kwargs):
+    """Send notification about skipped retraining due to no drift."""
+    ti = kwargs['ti']
+    skip_data = ti.xcom_pull(task_ids='log_no_drift_skip')
+
+    logging.info("=== NO DRIFT NOTIFICATION ===")
+    if skip_data and skip_data.get('drift_result'):
+        logging.info(f"Status: {skip_data['status']}")
+        logging.info(f"Drift share: {skip_data['drift_result'].get('drift_share', 0):.3f}")
+    logging.info("Production model unchanged. No retraining was triggered.")
+    logging.info("=== END ===")
+
+    return skip_data
+
+notify_no_drift_task = PythonOperator(
+    task_id='notify_no_drift',
+    python_callable=notify_no_drift,
+    dag=dag,
+)
+
 # End task (dummy operator for clean graph visualization)
 end_task = DummyOperator(
     task_id='end',
     trigger_rule='none_failed_or_skipped',  # Run regardless of which path was taken
     dag=dag,
 )
-
-# Define the task dependencies
-prepare_training_data >> run_training_and_hpo >> evaluate_model_performance_task >> compare_against_production_task >> deployment_decision_branch_task
 
 # Kubernetes readiness check function
 def check_kubernetes_readiness(**kwargs):
@@ -1534,11 +1621,17 @@ check_kubernetes_readiness_task = PythonOperator(
 )
 
 # Define the task dependencies
-# Drift detection runs first on FULL batch, then prepare_training_data splits it
-run_drift_detection_task >> prepare_training_data >> run_training_and_hpo >> evaluate_model_performance_task >> compare_against_production_task >> deployment_decision_branch_task
+# Drift detection runs first, then drift gate decides whether to retrain
+run_drift_detection_task >> drift_decision_branch_task
+
+# Retrain path (drift detected or force_retrain=True)
+drift_decision_branch_task >> prepare_training_data >> run_training_and_hpo >> evaluate_model_performance_task >> compare_against_production_task >> deployment_decision_branch_task
 
 # Deploy path - with Kubernetes readiness check
 deployment_decision_branch_task >> check_kubernetes_readiness_task >> register_and_promote_model_task >> build_api_image_task >> test_api_locally_task >> push_to_ecr >> deploy_to_kubernetes >> verify_deployment_task >> post_deployment_health_check_task >> notify_deployment_success_task >> end_task
 
-# Skip path  
-deployment_decision_branch_task >> log_skip_decision_task >> notify_no_deployment_task >> end_task 
+# Skip deploy path (AUC regression detected)
+deployment_decision_branch_task >> log_skip_decision_task >> notify_no_deployment_task >> end_task
+
+# Skip retrain path (no drift detected)
+drift_decision_branch_task >> log_no_drift_skip_task >> notify_no_drift_task >> end_task 
