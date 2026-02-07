@@ -1,5 +1,7 @@
 # Health Predict: End-to-End MLOps System for Patient Readmission Prediction
 
+![CI/CD Pipeline](https://github.com/bencappello/health-predict/actions/workflows/ci-cd.yml/badge.svg)
+
 <img src="images/readme_hero.png" alt="Diagram" width="500"/>
 
 ## Overview
@@ -7,6 +9,53 @@
 **Health Predict** is a comprehensive MLOps system designed to predict the risk of patient readmission in healthcare settings. This project implements a complete machine learning lifecycle from data ingestion to automated retraining, with a focus on robust MLOps practices and production-grade deployment.
 
 This system addresses the critical healthcare challenge of patient readmission, which not only burdens healthcare systems financially but also indicates potential gaps in patient care quality. By accurately predicting readmission risk, healthcare providers can implement targeted interventions, improving patient outcomes while optimizing resource allocation.
+
+## Business Problem
+
+Patient readmission—the return of a patient to the hospital shortly after discharge—represents both a significant healthcare quality issue and a financial burden:
+
+- Hospital readmissions cost the U.S. healthcare system approximately $26 billion annually
+- Readmissions often indicate unresolved health issues or inadequate post-discharge support
+- CMS penalizes hospitals for excessive readmission rates through the Hospital Readmissions Reduction Program
+- Early identification of at-risk patients enables proactive interventions
+
+Health Predict addresses this challenge by leveraging machine learning to predict which patients are most likely to be readmitted, allowing for targeted interventions before discharge and during follow-up care.
+
+## Key Features
+
+### ✅ Complete MLOps Lifecycle
+- End-to-end automation from data ingestion to production deployment
+- Continuous integration and deployment via Airflow orchestration
+- Model versioning and lineage tracking
+
+### ✅ Advanced Model Training
+- Distributed hyperparameter optimization with Ray Tune
+- Multiple model support (XGBoost, Random Forest, Logistic Regression)
+- Automatic best model selection based on AUC
+
+### ✅ CI/CD Automation
+- **GitHub Actions** pipeline for software CI/CD: test, build, push, deploy
+- **Airflow DAG** for ML CI/CD: drift detection, retraining, model deployment
+- Remote triggering via `workflow_dispatch` with configurable inputs
+- Self-hosted runner on EC2 for direct access to Minikube, Docker, and ECR
+
+### ✅ Production-Grade Deployment
+- Kubernetes deployment with rolling updates
+- Zero-downtime deployments
+- Automated health checks and readiness probes
+- **Model version verification** ensuring correct model deployment
+
+### ✅ Intelligent Monitoring & Retraining
+- **Drift-gated retraining**: Retraining only triggers when data drift is detected
+- Data drift detection with Evidently AI (KS-test for numeric, chi-squared for categorical features)
+- Regression guardrail preventing model performance degradation (AUC threshold: -0.02)
+- `force_retrain` DAG parameter to override drift gate when needed
+- Drift-aware cumulative learning across all previous batches
+
+### ✅ Robust Quality Gates
+- **Drift Detection** (Gating): Blocks unnecessary retraining when data distribution is stable
+- **Regression Guardrail** (Gating): Ensures new model doesn't degrade AUC by more than 2%
+- **Deployment Verification**: Confirms deployed model matches promoted version
 
 ## System Architecture
 
@@ -72,8 +121,6 @@ graph TB
     style API fill:#f6ffed,stroke:#333,color:#000
 ```
 
-
-
 ### Architecture Components
 
 1. **Data Layer (S3)**
@@ -113,46 +160,6 @@ graph TB
    - Auto-generated Swagger documentation
    - Health checks and readiness probes
    - Model metadata endpoint
-
-## Business Problem
-
-Patient readmission—the return of a patient to the hospital shortly after discharge—represents both a significant healthcare quality issue and a financial burden:
-
-- Hospital readmissions cost the U.S. healthcare system approximately $26 billion annually
-- Readmissions often indicate unresolved health issues or inadequate post-discharge support
-- CMS penalizes hospitals for excessive readmission rates through the Hospital Readmissions Reduction Program
-- Early identification of at-risk patients enables proactive interventions
-
-Health Predict addresses this challenge by leveraging machine learning to predict which patients are most likely to be readmitted, allowing for targeted interventions before discharge and during follow-up care.
-
-## Key Features
-
-### ✅ Complete MLOps Lifecycle
-- End-to-end automation from data ingestion to production deployment
-- Continuous integration and deployment via Airflow orchestration
-- Model versioning and lineage tracking
-
-### ✅ Advanced Model Training
-- Distributed hyperparameter optimization with Ray Tune
-- Multiple model support (XGBoost, Random Forest, Logistic Regression)
-- Automatic best model selection based on AUC
-
-### ✅ Production-Grade Deployment
-- Kubernetes deployment with rolling updates
-- Zero-downtime deployments
-- Automated health checks and readiness probes
-- **Model version verification** ensuring correct model deployment
-
-### ✅ Intelligent Monitoring & Retraining
-- Data drift detection with Evidently AI (KS-test, PSI)
-- Regression guardrail preventing model performance degradation
-- Automated retraining on every batch
-- Drift-aware cumulative learning
-
-### ✅ Robust Quality Gates
-- **Drift Detection** (Non-gating): Monitors data distribution changes
-- **Regression Guardrail** (Gating): Ensures new model doesn't degrade (AUC-based)
-- **Deployment Verification**: Confirms deployed model matches promoted version
 
 ## Project Structure
 
@@ -487,32 +494,53 @@ Generates readmission prediction for a patient.
 
 ## Monitoring & Drift Detection
 
-The system implements comprehensive monitoring:
+The system implements drift-gated retraining — the pipeline only retrains when data drift is detected.
 
 ### Drift Detection Strategy
-- **Frequency**: Every batch (periodic)
-- **Method**: Evidently AI with KS-test for numeric features
-- **Threshold**: 15% drift share (non-gating)
+- **Frequency**: Every batch trigger
+- **Method**: Evidently AI with KS-test for numeric features, chi-squared for categorical features
+- **Features Analyzed**: ~44 features (11 numeric + 33 categorical; high-cardinality ICD-9 diagnostic codes excluded)
+- **Threshold**: 30% drift share (gating — controls whether retraining proceeds)
 - **Metrics Tracked**: drift_share, n_drifted_columns, dataset_drift
 - **Storage**: HTML reports in S3, metrics in MLflow
+- **Override**: Set `force_retrain: true` in DAG config to bypass drift gate
 
-### Batch 5 Drift Results
-- **Drift Share**: 90.9% (10/11 features drifted)
-- **Dataset Drift**: True
-- **Action**: Model retrained on cumulative data
-- **Outcome**: New model (v9) deployed successfully
+### Drift-Aware Batch Profiles
+
+The system includes 5 pre-generated batches with intentional distribution differences to demonstrate drift detection:
+
+| Batch | Profile | Drift Share | Pipeline Action |
+|-------|---------|-------------|-----------------|
+| 1 | No drift (random sample) | ~27% | Skip retraining |
+| 2 | No drift (random sample) | ~27% | Skip retraining |
+| 3 | Gradual covariate drift (older/sicker patients) | ~32% | Retrain |
+| 4 | Strong covariate drift (aggressive demographic shift) | ~34% | Retrain |
+| 5 | Concept drift (changed feature-target relationships) | ~35% | Retrain |
+
+To regenerate batches:
+```bash
+python scripts/create_drift_aware_batches.py --bucket-name $S3_BUCKET_NAME
+```
+
+To force retraining even without drift:
+```bash
+docker exec mlops-services-airflow-scheduler-1 \
+  airflow dags trigger health_predict_continuous_improvement \
+  --conf '{"batch_number": 1, "force_retrain": true}'
+```
 
 ### Quality Gates
-1. **Drift Detection** (Non-gating): Monitor only, always proceed
-2. **Regression Guardrail** (Gating): New model must not degrade AUC by more than threshold
+1. **Drift Detection** (Gating): Retraining only proceeds if drift detected or `force_retrain=true`
+2. **Regression Guardrail** (Gating): New model must not degrade AUC by more than 2% (`REGRESSION_THRESHOLD=-0.02`)
 3. **Deployment Verification**: Deployed model version must match promoted version
 
 ## Results & Achievements
 
 - ✅ **Performance**: Models achieve 64%+ AUC in predicting patient readmission
 - ✅ **Automation**: 100% automated pipeline from data to deployment
+- ✅ **Drift-Gated Retraining**: Pipeline intelligently skips retraining when data distribution is stable
 - ✅ **Reliability**: End-to-end deployment with explicit version verification
-- ✅ **Monitoring**: Real-time drift detection with automated remediation
+- ✅ **Monitoring**: Drift detection with KS-test (numeric) and chi-squared (categorical)
 - ✅ **Reproducibility**: Complete model lineage tracking in MLflow
 - ✅ **Scalability**: Kubernetes deployment ready for production scale
 
@@ -559,14 +587,48 @@ curl http://localhost:5000/health
 docker exec mlops-services-airflow-scheduler-1 env | grep MLFLOW
 ```
 
+## CI/CD Architecture
+
+Health Predict uses a **dual-pipeline** CI/CD architecture:
+
+| Pipeline | Trigger | Purpose |
+|----------|---------|---------|
+| **GitHub Actions** | Code changes (push/PR) or manual `workflow_dispatch` | Software CI/CD: test, build Docker image, push to ECR, deploy to K8s |
+| **Airflow DAG** | Data events (new batch) or manual trigger | ML CI/CD: drift detection, retraining, model promotion, deploy |
+
+### GitHub Actions Workflow
+
+The `.github/workflows/ci-cd.yml` workflow has three jobs:
+
+1. **test** — Runs on every push and PR. Installs test dependencies, runs unit tests. Integration tests available via manual trigger.
+2. **build-and-push** — Runs on pushes to `main` and manual triggers. Builds the Docker image, runs a smoke test, and pushes to ECR.
+3. **deploy** — Runs on pushes to `main` and when `deploy_to_k8s=true`. Refreshes ECR pull secret, performs a rolling update, and verifies the deployment.
+
+### Remote Triggering
+
+```bash
+# Trigger full pipeline (build + deploy)
+gh workflow run ci-cd.yml -f deploy_to_k8s=true
+
+# Trigger with integration tests
+gh workflow run ci-cd.yml -f run_integration_tests=true -f deploy_to_k8s=true
+
+# Monitor a run
+gh run watch
+```
+
+### Self-Hosted Runner
+
+The workflow runs on a self-hosted GitHub Actions runner on the EC2 instance, giving it direct access to Docker, Minikube, ECR, and the MLOps service network. See `scripts/setup-github-runner.sh` for setup instructions.
+
 ## Future Enhancements
 
 While the current system implements a complete MLOps lifecycle with drift detection, automated retraining, and model version verification, the following enhancements could further improve the system:
 
 ### 1. Advanced Drift Detection Metrics
-- **Current**: Evidently AI with KS-test for distribution drift
-- **Enhancement**: Add PSI (Population Stability Index) and Wasserstein distance for more sensitive drift detection
-- **Benefit**: Earlier detection of subtle distribution changes
+- **Current**: KS-test (numeric) + chi-squared (categorical) with drift-gated retraining
+- **Enhancement**: Add PSI (Population Stability Index) and Wasserstein distance for more granular sensitivity
+- **Benefit**: Fine-tuned detection thresholds per feature type
 
 ### 2. A/B Testing Framework
 - **Current**: Single production model deployment with regression guardrail
@@ -602,10 +664,6 @@ While the current system implements a complete MLOps lifecycle with drift detect
 - **Current**: Feature engineering in training pipeline
 - **Enhancement**: Dedicated feature store (e.g., Feast) for feature versioning and serving
 - **Benefit**: Consistent features between training and inference, feature reusability
-
-## License
-
-This project is for educational and demonstration purposes.
 
 ## Acknowledgments
 

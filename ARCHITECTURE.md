@@ -463,68 +463,59 @@ reference_data = load_from_s3(INITIAL_TRAIN_KEY)
 # 2. Load current batch
 current_data = load_from_s3(f"batch_{batch_number}.csv")
 
-# 3. Apply same preprocessing
-reference_processed = preprocess(reference_data)
-current_processed = preprocess(current_data)
+# 3. Exclude non-feature and high-cardinality columns
+exclude_cols = ['encounter_id', 'patient_nbr', 'readmitted', 'readmitted_binary',
+                'diag_1', 'diag_2', 'diag_3']  # ICD-9 codes too high-cardinality for chi-squared
 
-# 4. Select numeric features for drift
-numeric_features = [...] # 11 features
+# 4. Prepare categorical columns (fillna, cast to str)
+for col in object_columns:
+    ref_features[col] = ref_features[col].fillna('Unknown').astype(str)
 
-# 5. Run drift detection
-drift_report = Report(metrics=[
-    DatasetDriftMetric(columns=numeric_features)
-])
-drift_report.run(
-    reference_data=reference_processed[numeric_features],
-    current_data=current_processed[numeric_features]
-)
+# 5. Run drift detection (~44 features: 11 numeric + 33 categorical)
+drift_report = Report(metrics=[DataDriftPreset()])
+drift_report.run(reference_data=ref_features, current_data=new_features)
 
 # 6. Extract metrics
-metrics = drift_report.as_dict()
-drift_share = metrics["metrics"][0]["result"]["share_of_drifted_columns"]
-dataset_drift = metrics["metrics"][0]["result"]["dataset_drift"]
+drift_share = result["share_of_drifted_columns"]  # KS-test (numeric), chi-squared (categorical)
+dataset_drift = result["dataset_drift"]
 
-# 7. Save HTML report to S3
-drift_report.save_html(f"batch_{batch_number}_drift_report.html")
-
-# 8. Log to MLflow
-mlflow.log_metrics({
-    "drift_share": drift_share,
-    "n_drifted_columns": n_drifted,
-    "n_total_columns": n_total,
-    "dataset_drift": int(dataset_drift)
-})
+# 7. Drift gate decision
+if drift_share > DRIFT_THRESHOLD or force_retrain:
+    proceed_to_retraining()
+else:
+    skip_retraining()  # No drift detected, production model maintained
 ```
 
 **Drift Metrics**:
 - **Drift Share**: Percentage of features showing distribution drift
-- **Dataset Drift**: Boolean (True if drift_share > 0.15)
-- **Drifted Columns**: Number of features with p-value < 0.05 (KS-test)
+- **Threshold**: 30% drift share (gating — controls retraining)
+- **Numeric Features**: 11 features tested via KS-test (p-value < 0.05)
+- **Categorical Features**: 33 features tested via chi-squared test
 
-**Batch 5 Example**:
-- Drift Share: 90.9%
-- Drifted Columns: 10/11
-- Dataset Drift: True
-- Action: Retrain (periodic strategy, drift is monitored not gating)
+**Drift-Aware Batch Examples**:
+- Batch 1 (no drift): drift_share ~27%, 12/44 features → **Skip retraining**
+- Batch 4 (strong drift): drift_share ~34%, 15/44 features → **Retrain**
 
 ### 8. Quality Gates
 
-#### Two-Stage Quality Assurance
+#### Three-Stage Quality Assurance
 
-**Stage 1: Drift Detection** (Non-Gating)
-- Purpose: Observability into data changes
-- Threshold: 15% (informational)
-- Action: Log to MLflow, proceed regardless
-- Rationale: Periodic retraining expects drift
+**Stage 1: Drift Detection** (Gating)
+- Purpose: Gate retraining based on data distribution changes
+- Method: KS-test (numeric) + chi-squared (categorical) via Evidently AI
+- Threshold: 30% drift share
+- Action: If drift detected → proceed to retraining. If not → skip to end.
+- Override: `force_retrain` DAG config parameter bypasses drift gate
+- Rationale: No need to retrain when data distribution is stable
 
 **Stage 2: Regression Guardrail** (Gating)
-- Purpose: Prevent model performance degradation  
+- Purpose: Prevent model performance degradation
 - Metric: AUC on temporal test set
-- Threshold: -0.5 (allow 50% regression for demo, -0.02 for production)
+- Threshold: -0.02 (allow max 2% AUC regression)
 - Logic: `if (new_auc - prod_auc) > REGRESSION_THRESHOLD: DEPLOY`
 - Action: Branch to DEPLOY or SKIP
 
-**Stage 3: Model Version Verification** ⭐ NEW (Gating)
+**Stage 3: Model Version Verification** (Gating)
 - Purpose: Ensure correct model deployed
 - Method: Query `/model-info`, compare with promoted version
 - Check: `deployed_version == promoted_version AND deployed_run_id == promoted_run_id`
@@ -598,6 +589,94 @@ XGBoost Model
     ↓ (format response)
 JSON Response with Version
 ```
+
+## CI/CD Pipeline Architecture
+
+### Dual-Pipeline Design
+
+Health Predict uses two complementary CI/CD pipelines:
+
+```mermaid
+graph LR
+    subgraph "Software CI/CD - GitHub Actions"
+        Push[Code Push / PR] --> Test[Run Tests]
+        Test --> Build[Build Docker Image]
+        Build --> Smoke[Smoke Test]
+        Smoke --> Push_ECR[Push to ECR]
+        Push_ECR --> Deploy_GH[Deploy to K8s]
+        Deploy_GH --> Verify_GH[Verify Deployment]
+    end
+
+    subgraph "ML CI/CD - Airflow DAG"
+        Batch[New Data Batch] --> Drift[Drift Detection]
+        Drift --> Retrain[Retrain Model]
+        Retrain --> Eval[Evaluate]
+        Eval --> Promote[Promote Model]
+        Promote --> Deploy_AF[Build + Deploy]
+        Deploy_AF --> Verify_AF[Verify Model Version]
+    end
+
+    style Push fill:#e6f7ff,stroke:#333,color:#000
+    style Batch fill:#fff4e6,stroke:#333,color:#000
+```
+
+| Pipeline | Trigger | Scope |
+|----------|---------|-------|
+| GitHub Actions | Code changes, manual dispatch | Code testing, image build, infrastructure deploy |
+| Airflow DAG | Data batch arrival, manual trigger | Drift detection, model training, model deploy |
+
+### GitHub Actions Workflow
+
+**File**: `.github/workflows/ci-cd.yml`
+
+```mermaid
+graph TB
+    Trigger[Push / PR / workflow_dispatch] --> TestJob[test job]
+    TestJob --> |push or dispatch| BuildJob[build-and-push job]
+    Trigger --> |PR only| TestOnly[test only - no build/deploy]
+    BuildJob --> |main + deploy flag| DeployJob[deploy job]
+
+    subgraph "test"
+        TestJob --> Checkout1[Checkout]
+        Checkout1 --> InstallDeps[Install test deps]
+        InstallDeps --> UnitTests[pytest unit tests]
+        UnitTests --> IntegTests[Integration tests - optional]
+    end
+
+    subgraph "build-and-push"
+        BuildJob --> DockerBuild[Docker build]
+        DockerBuild --> SmokeTest[Smoke test container]
+        SmokeTest --> ECRLogin[ECR login]
+        ECRLogin --> ECRPush[Push image]
+    end
+
+    subgraph "deploy"
+        DeployJob --> RefreshSecret[Refresh ECR pull secret]
+        RefreshSecret --> SetImage[kubectl set image]
+        SetImage --> Rollout[Wait for rollout]
+        Rollout --> VerifyAPI[Verify /health + /model-info]
+    end
+
+    style TestOnly fill:#f6ffed,stroke:#333,color:#000
+```
+
+### Self-Hosted Runner
+
+The GitHub Actions runner runs directly on the EC2 instance as a systemd service:
+
+```
+EC2 Instance
+├── GitHub Actions Runner (systemd)
+│   └── Has access to:
+│       ├── Docker daemon (build images, run containers)
+│       ├── Minikube cluster (kubectl, deploy)
+│       ├── AWS CLI (ECR push, S3 access)
+│       └── MLOps Docker network (smoke tests)
+├── Docker Compose (Airflow, MLflow, PostgreSQL)
+└── Minikube (API pods)
+```
+
+The runner is registered with labels `self-hosted,linux,x64,ec2,mlops` and starts automatically on boot.
 
 ## Security Considerations
 
