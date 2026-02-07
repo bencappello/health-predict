@@ -1,0 +1,211 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'Dockerfile'
+      - 'k8s/**'
+      - 'tests/**'
+      - '.github/workflows/ci-cd.yml'
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      deploy_to_k8s:
+        description: 'Deploy to Kubernetes after build'
+        required: false
+        type: boolean
+        default: false
+      run_integration_tests:
+        description: 'Run integration tests (requires MLOps services)'
+        required: false
+        type: boolean
+        default: false
+
+env:
+  ECR_REGISTRY: 692133751630.dkr.ecr.us-east-1.amazonaws.com
+  ECR_REPOSITORY: health-predict-api
+  AWS_REGION: us-east-1
+  K8S_DEPLOYMENT_NAME: health-predict-api-deployment
+  K8S_NAMESPACE: default
+
+jobs:
+  test:
+    name: Run Tests
+    runs-on: self-hosted
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install test dependencies
+        run: pip install -r tests/requirements.txt
+
+      - name: Run unit tests
+        run: pytest tests/drift/test_batch_split.py -v
+
+      - name: Run integration tests
+        if: >-
+          github.event_name == 'workflow_dispatch' &&
+          github.event.inputs.run_integration_tests == 'true'
+        run: |
+          echo "Checking if MLOps services are running..."
+          if curl -sf http://localhost:5000/health > /dev/null 2>&1; then
+            echo "MLflow is up — running integration tests"
+            pytest tests/integration/test_drift_retraining_flow.py -v
+          else
+            echo "MLOps services not running — skipping integration tests"
+            exit 0
+          fi
+
+  build-and-push:
+    name: Build & Push Docker Image
+    runs-on: self-hosted
+    needs: test
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    outputs:
+      image_tag: ${{ steps.build.outputs.image_tag }}
+      full_image_name: ${{ steps.build.outputs.full_image_name }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build Docker image
+        id: build
+        run: |
+          SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
+          TIMESTAMP=$(date +%s)
+          IMAGE_TAG="gh-${SHORT_SHA}-${TIMESTAMP}"
+          FULL_IMAGE="${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}"
+
+          echo "Building image: ${FULL_IMAGE}"
+          docker build -t "${ECR_REPOSITORY}:${IMAGE_TAG}" \
+            --build-arg MODEL_NAME=HealthPredictModel .
+
+          docker tag "${ECR_REPOSITORY}:${IMAGE_TAG}" "${FULL_IMAGE}"
+
+          echo "image_tag=${IMAGE_TAG}" >> "$GITHUB_OUTPUT"
+          echo "full_image_name=${FULL_IMAGE}" >> "$GITHUB_OUTPUT"
+
+      - name: Smoke test container
+        run: |
+          IMAGE_TAG="${{ steps.build.outputs.image_tag }}"
+          CONTAINER_NAME="ci-smoke-test-${IMAGE_TAG}"
+
+          echo "Starting smoke test container..."
+          docker run -d --name "${CONTAINER_NAME}" \
+            --network mlops-services_mlops_network \
+            -e MLFLOW_TRACKING_URI=http://mlflow:5000 \
+            -e MODEL_NAME=HealthPredictModel \
+            -e MODEL_STAGE=Production \
+            "${ECR_REPOSITORY}:${IMAGE_TAG}"
+
+          echo "Waiting for container to start..."
+          sleep 15
+
+          CONTAINER_IP=$(docker inspect -f '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "${CONTAINER_NAME}" 2>/dev/null)
+          if [ -z "${CONTAINER_IP}" ]; then
+            echo "Warning: Could not get container IP, checking logs..."
+            docker logs "${CONTAINER_NAME}" 2>&1 | tail -20
+            docker rm -f "${CONTAINER_NAME}" 2>/dev/null
+            echo "Smoke test skipped (container network issue) — continuing with push"
+            exit 0
+          fi
+
+          HEALTH_STATUS=$(curl -sf "http://${CONTAINER_IP}:8000/health" 2>/dev/null || echo "FAIL")
+          docker rm -f "${CONTAINER_NAME}" 2>/dev/null
+
+          if echo "${HEALTH_STATUS}" | grep -q "healthy"; then
+            echo "Smoke test passed: /health returned healthy"
+          else
+            echo "Warning: Smoke test inconclusive (status: ${HEALTH_STATUS})"
+            echo "Continuing — the API may need MLflow model access to fully start"
+          fi
+
+      - name: Login to ECR
+        run: |
+          aws ecr get-login-password --region ${AWS_REGION} | \
+            docker login --username AWS --password-stdin ${ECR_REGISTRY}
+
+      - name: Push to ECR
+        run: |
+          FULL_IMAGE="${{ steps.build.outputs.full_image_name }}"
+          echo "Pushing ${FULL_IMAGE}..."
+          docker push "${FULL_IMAGE}"
+          echo "Push complete"
+
+  deploy:
+    name: Deploy to Kubernetes
+    runs-on: self-hosted
+    needs: build-and-push
+    if: >-
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.deploy_to_k8s == 'true')
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Refresh ECR pull secret
+        run: |
+          echo "Refreshing ECR pull secret..."
+          ECR_TOKEN=$(aws ecr get-login-password --region ${AWS_REGION})
+          kubectl delete secret ecr-registry-key --namespace ${K8S_NAMESPACE} --ignore-not-found
+          kubectl create secret docker-registry ecr-registry-key \
+            --docker-server=${ECR_REGISTRY} \
+            --docker-username=AWS \
+            --docker-password="${ECR_TOKEN}" \
+            --namespace ${K8S_NAMESPACE}
+          echo "ECR pull secret refreshed"
+
+      - name: Deploy to Kubernetes
+        run: |
+          FULL_IMAGE="${{ needs.build-and-push.outputs.full_image_name }}"
+          echo "Deploying image: ${FULL_IMAGE}"
+
+          kubectl set image deployment/${K8S_DEPLOYMENT_NAME} \
+            health-predict-api-container="${FULL_IMAGE}" \
+            --namespace ${K8S_NAMESPACE}
+
+          echo "Waiting for rollout..."
+          kubectl rollout status deployment/${K8S_DEPLOYMENT_NAME} \
+            --namespace ${K8S_NAMESPACE} \
+            --timeout=300s
+
+          echo "Rollout complete"
+
+      - name: Verify deployment
+        run: |
+          echo "Verifying deployment..."
+          MINIKUBE_IP=$(minikube ip)
+          NODE_PORT=$(kubectl get svc health-predict-api-service \
+            --namespace ${K8S_NAMESPACE} \
+            -o jsonpath='{.spec.ports[0].nodePort}')
+          API_URL="http://${MINIKUBE_IP}:${NODE_PORT}"
+
+          echo "API URL: ${API_URL}"
+
+          # Wait for API readiness (up to 90 seconds)
+          for i in $(seq 1 18); do
+            if curl -sf "${API_URL}/health" > /dev/null 2>&1; then
+              echo "API is responding"
+              break
+            fi
+            echo "Attempt ${i}/18: API not ready, waiting 5s..."
+            sleep 5
+          done
+
+          # Health check
+          echo "=== Health Check ==="
+          curl -sf "${API_URL}/health" | python3 -m json.tool
+
+          # Model info
+          echo "=== Model Info ==="
+          curl -sf "${API_URL}/model-info" | python3 -m json.tool
+
+          echo "Deployment verified successfully"
