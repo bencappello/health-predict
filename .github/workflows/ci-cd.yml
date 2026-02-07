@@ -50,12 +50,16 @@ jobs:
           pip install pandas numpy scikit-learn
 
       - name: Run unit tests
+        env:
+          PYTHONPATH: ${{ github.workspace }}
         run: pytest tests/drift/test_batch_split.py -v
 
       - name: Run integration tests
         if: >-
           github.event_name == 'workflow_dispatch' &&
           github.event.inputs.run_integration_tests == 'true'
+        env:
+          PYTHONPATH: ${{ github.workspace }}
         run: |
           echo "Checking if MLOps services are running..."
           if curl -sf http://localhost:5000/health > /dev/null 2>&1; then
