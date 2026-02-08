@@ -884,18 +884,49 @@ def evaluate_production_only(**kwargs):
     y_test = test_data_featured['readmitted_binary']
 
     # 7. Align features with production model (reuse alignment logic)
+    logging.info(f"Attempting to extract feature names from production model (type: {type(prod_model).__name__})")
     expected_features = None
-    if hasattr(prod_model, 'feature_names_in_') and prod_model.feature_names_in_ is not None:
-        expected_features = list(prod_model.feature_names_in_)
-        logging.info(f"Got {len(expected_features)} features from feature_names_in_")
-    elif hasattr(prod_model, 'get_booster'):
+
+    # Try feature_names_in_ (scikit-learn style)
+    if hasattr(prod_model, 'feature_names_in_'):
+        logging.info(f"Model has feature_names_in_ attribute: {prod_model.feature_names_in_ is not None}")
+        if prod_model.feature_names_in_ is not None:
+            expected_features = list(prod_model.feature_names_in_)
+            logging.info(f"Got {len(expected_features)} features from feature_names_in_")
+
+    # Try get_booster() for XGBoost models
+    if expected_features is None and hasattr(prod_model, 'get_booster'):
+        logging.info("Trying get_booster() method")
         try:
             booster = prod_model.get_booster()
-            if hasattr(booster, 'feature_names') and booster.feature_names is not None:
-                expected_features = list(booster.feature_names)
-                logging.info(f"Got {len(expected_features)} features from get_booster()")
+            logging.info(f"Got booster, checking for feature_names attribute")
+            if hasattr(booster, 'feature_names'):
+                logging.info(f"Booster has feature_names: {booster.feature_names is not None}")
+                if booster.feature_names is not None:
+                    expected_features = list(booster.feature_names)
+                    logging.info(f"Got {len(expected_features)} features from get_booster()")
         except Exception as e:
             logging.warning(f"Failed to get feature names from get_booster(): {e}")
+
+    # Method 3: Try n_features_in_ as fallback (know the count but not names)
+    if expected_features is None and hasattr(prod_model, 'n_features_in_'):
+        n_features = prod_model.n_features_in_
+        logging.info(f"Production model expects {n_features} features (no names available, using count)")
+        # If we know the count but not names, pad/truncate to match
+        if len(X_test.columns) != n_features:
+            logging.warning(f"Feature count mismatch: model expects {n_features}, got {len(X_test.columns)}")
+            # Pad with zeros if needed
+            while len(X_test.columns) < n_features:
+                X_test[f'_pad_{len(X_test.columns)}'] = 0
+                logging.info(f"Added padding column: _pad_{len(X_test.columns)-1}")
+            # Truncate if too many
+            if len(X_test.columns) > n_features:
+                logging.warning(f"Truncating from {len(X_test.columns)} to {n_features} features")
+                X_test = X_test.iloc[:, :n_features]
+        logging.info(f"Aligned by count: {X_test.shape}")
+
+    if expected_features is None and not hasattr(prod_model, 'n_features_in_'):
+        logging.error("Could not extract feature names or count from production model - prediction may fail!")
 
     if expected_features is not None:
         logging.info(f"Aligning features: model expects {len(expected_features)}, test data has {len(X_test.columns)}")
