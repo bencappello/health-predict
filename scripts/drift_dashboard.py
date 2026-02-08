@@ -349,6 +349,7 @@ with tab_perf:
         st.info("No quality-gate evaluation data available. Run the pipeline with deployment to generate metrics.")
     else:
         batch_col = _col(training_df, "params.", "batch_number")
+        decision_tag = _col(training_df, "tags.", "decision")
         new_auc = _col(training_df, "metrics.", "new_auc_test")
         new_f1 = _col(training_df, "metrics.", "new_f1_test")
         prod_auc = _col(training_df, "metrics.", "prod_auc_test")
@@ -358,11 +359,13 @@ with tab_perf:
         perf_df = pd.DataFrame(
             {
                 "batch": pd.to_numeric(batch_col, errors="coerce"),
+                "decision": decision_tag,
                 "new_auc": pd.to_numeric(new_auc, errors="coerce"),
                 "new_f1": pd.to_numeric(new_f1, errors="coerce"),
                 "prod_auc": pd.to_numeric(prod_auc, errors="coerce"),
                 "auc_improvement": pd.to_numeric(auc_imp, errors="coerce"),
                 "f1_improvement": pd.to_numeric(f1_imp, errors="coerce"),
+                "run_id": training_df["run_id"],
             }
         ).dropna(subset=["batch", "new_auc"]).sort_values("batch")
 
@@ -419,10 +422,11 @@ with tab_perf:
 
             # Metrics comparison table
             st.markdown("#### Metrics Comparison Table")
-            comp = perf_df[["batch", "new_auc", "new_f1", "prod_auc", "auc_improvement", "f1_improvement"]].copy()
+            comp = perf_df[["batch", "decision", "new_auc", "new_f1", "prod_auc", "auc_improvement", "f1_improvement"]].copy()
             comp["batch"] = comp["batch"].astype(int)
             comp.columns = [
                 "Batch",
+                "Decision",
                 "New AUC",
                 "New F1",
                 "Prod AUC",
@@ -430,6 +434,90 @@ with tab_perf:
                 "F1 Improvement",
             ]
             st.dataframe(comp, width="stretch", hide_index=True)
+
+            # ROC Curve Visualization
+            st.markdown("### ROC Curves by Batch")
+            st.markdown("Shows true positive rate vs false positive rate for each batch's model.")
+
+            # Let user select batch to visualize
+            selected_batch = st.selectbox(
+                "Select batch to view ROC curve:",
+                options=sorted(perf_df['batch'].unique()),
+                format_func=lambda x: f"Batch {int(x)}"
+            )
+
+            # Get the quality gate run for selected batch
+            batch_mask = perf_df['batch'] == selected_batch
+            if batch_mask.any():
+                run_id = perf_df[batch_mask].iloc[0]['run_id']
+
+                # Download ROC curve artifacts from MLflow
+                client = MlflowClient(mlflow_uri)
+                try:
+                    import json
+                    artifact_path = client.download_artifacts(run_id, "roc_curves")
+
+                    fig_roc = go.Figure()
+
+                    # Load production model ROC curve (exists for both SKIP_NO_DRIFT and DEPLOY)
+                    try:
+                        with open(f"{artifact_path}/roc_curve_production.json", 'r') as f:
+                            roc_prod = json.load(f)
+
+                        fig_roc.add_trace(go.Scatter(
+                            x=roc_prod['fpr'],
+                            y=roc_prod['tpr'],
+                            mode='lines',
+                            name=f"Production Model (AUC={roc_prod['auc']:.3f})",
+                            line=dict(color='blue', width=2),
+                        ))
+                    except Exception:
+                        pass
+
+                    # Load new model ROC curve (exists for DEPLOY runs only)
+                    try:
+                        with open(f"{artifact_path}/roc_curve_new.json", 'r') as f:
+                            roc_new = json.load(f)
+
+                        fig_roc.add_trace(go.Scatter(
+                            x=roc_new['fpr'],
+                            y=roc_new['tpr'],
+                            mode='lines',
+                            name=f"New Model (AUC={roc_new['auc']:.3f})",
+                            line=dict(color='green', width=2),
+                        ))
+                    except Exception:
+                        pass
+
+                    # Add diagonal reference line (random classifier)
+                    fig_roc.add_trace(go.Scatter(
+                        x=[0, 1],
+                        y=[0, 1],
+                        mode='lines',
+                        name='Random Classifier',
+                        line=dict(color='gray', width=1, dash='dash'),
+                    ))
+
+                    fig_roc.update_layout(
+                        title=f"ROC Curve - Batch {int(selected_batch)}",
+                        xaxis_title="False Positive Rate",
+                        yaxis_title="True Positive Rate",
+                        hovermode='closest',
+                        legend=dict(x=0.6, y=0.1),
+                        width=800,
+                        height=600,
+                    )
+
+                    st.plotly_chart(fig_roc, use_container_width=True)
+
+                    st.caption(
+                        "**Interpretation**: The closer the curve is to the top-left corner, "
+                        "the better the model. AUC = 1.0 is perfect, AUC = 0.5 is random guessing."
+                    )
+                except Exception as e:
+                    st.warning(f"Could not load ROC curve data: {e}")
+            else:
+                st.info(f"No ROC curve data available for batch {int(selected_batch)}")
         else:
             st.warning("Performance data could not be parsed.")
 
