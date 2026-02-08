@@ -85,16 +85,36 @@ def load_training_data(tracking_uri: str) -> pd.DataFrame:
 
 
 @st.cache_data(ttl=60)
-def load_hpo_trials(tracking_uri: str, parent_run_id: str) -> pd.DataFrame:
-    """Load child (HPO trial) runs for a given parent run."""
+def load_hpo_trials(tracking_uri: str, ref_run_id: str) -> pd.DataFrame:
+    """Load HPO trial runs from the same pipeline execution as *ref_run_id*.
+
+    The training script creates top-level (not nested) HPO trial runs, so we
+    identify them by finding all ``hpo_trial`` runs whose start time falls
+    within a short window before the reference run (quality gate or best-model
+    run), since HPO trials run just before the evaluation step.
+    """
     try:
         mlflow.set_tracking_uri(tracking_uri)
+        client = mlflow.tracking.MlflowClient()
         experiment = mlflow.get_experiment_by_name(TRAINING_EXPERIMENT)
         if experiment is None:
             return pd.DataFrame()
+
+        # Look up the reference run's start time
+        ref_run = client.get_run(ref_run_id)
+        ref_start_ms = ref_run.info.start_time  # epoch milliseconds
+
+        # HPO trials run before the quality gate; search 10 min before to 2 min after
+        start_ms = ref_start_ms - 10 * 60 * 1000
+        end_ms = ref_start_ms + 2 * 60 * 1000
+
         runs = mlflow.search_runs(
             experiment_ids=[experiment.experiment_id],
-            filter_string=f"tags.mlflow.parentRunId = '{parent_run_id}'",
+            filter_string=(
+                f"tags.hpo_trial = 'True'"
+                f" and attributes.start_time >= {start_ms}"
+                f" and attributes.start_time <= {end_ms}"
+            ),
             order_by=["metrics.val_roc_auc_score DESC"],
             max_results=50,
         )
@@ -433,10 +453,11 @@ with tab_training:
             batch_runs = training_df[batch_mask]
 
             if not batch_runs.empty:
-                parent_run_id = batch_runs.iloc[0]["run_id"]
-                st.markdown(f"**Parent run ID:** `{parent_run_id}`")
+                # Use the quality gate run itself as time reference for finding HPO trials
+                qg_run_id = batch_runs.iloc[0]["run_id"]
+                st.markdown(f"**Quality gate run ID:** `{qg_run_id}`")
 
-                trials_df = load_hpo_trials(mlflow_uri, parent_run_id)
+                trials_df = load_hpo_trials(mlflow_uri, qg_run_id)
                 if not trials_df.empty:
                     st.markdown("#### HPO Trials")
                     # Select useful columns

@@ -687,32 +687,31 @@ def compare_against_production(**kwargs):
     else:
         prod_auc, prod_precision, prod_recall, prod_f1 = 0, 0, 0, 0
     
-    # 5. Log metrics to MLflow
+    # 5. Log metrics to a dedicated quality gate run (separate from HPO training run)
+    experiment_name = kwargs['params']['experiment_name']
+    mlflow.set_experiment(experiment_name)
     try:
-        with mlflow.start_run(run_id=new_run_id):
+        with mlflow.start_run(run_name=f"quality_gate_batch_{batch_number}"):
+            mlflow.log_param("batch_number", batch_number)
+            mlflow.log_param("test_set_used", test_set_name)
+            mlflow.log_param("training_run_id", new_run_id)
+            mlflow.log_param("model_type", new_model_perf.get('model_type', 'unknown'))
+            mlflow.set_tag("quality_gate", "True")
             mlflow.log_metric("new_auc_test", new_auc)
             mlflow.log_metric("new_f1_test", new_f1)
             mlflow.log_metric("new_precision_test", new_precision)
             mlflow.log_metric("new_recall_test", new_recall)
-            
+
             if has_production:
                 mlflow.log_metric("prod_auc_test", prod_auc)
                 mlflow.log_metric("prod_f1_test", prod_f1)
                 mlflow.log_metric("prod_precision_test", prod_precision)
                 mlflow.log_metric("prod_recall_test", prod_recall)
-                
+
                 mlflow.log_metric("auc_improvement", new_auc - prod_auc)
                 mlflow.log_metric("f1_improvement", new_f1 - prod_f1)
-            
-            # Try to log params - may fail if already logged
-            try:
-                mlflow.log_param("test_set_used", test_set_name)
-                mlflow.log_param("batch_number", batch_number)
-            except Exception as param_err:
-                logging.warning(f"Could not update params (may already exist): {param_err}")
     except Exception as e:
-        # Log metrics may fail on some runs - continue with decision
-        logging.warning(f"MLflow logging warning: {e}")
+        logging.warning(f"MLflow quality gate logging warning: {e}")
     
     # 6. Decision logic (AUC-based)
     if not has_production:
@@ -760,7 +759,8 @@ compare_against_production_task = PythonOperator(
     python_callable=compare_against_production,
     params={
         'mlflow_uri': env_vars['MLFLOW_TRACKING_URI'],
-        'regression_threshold': env_vars['REGRESSION_THRESHOLD']
+        'regression_threshold': env_vars['REGRESSION_THRESHOLD'],
+        'experiment_name': env_vars['EXPERIMENT_NAME']
     },
     dag=dag,
 )
