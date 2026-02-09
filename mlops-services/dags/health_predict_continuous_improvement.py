@@ -230,8 +230,8 @@ def drift_decision_branch(**kwargs):
         logging.info(f"DECISION: RETRAIN ({reason})")
         return 'prepare_drift_aware_data'
     else:
-        logging.info(f"DECISION: SKIP RETRAINING (no drift, drift_share={drift_share:.3f})")
-        return 'log_no_drift_skip'
+        logging.info(f"DECISION: EVALUATE PRODUCTION ONLY (no drift, drift_share={drift_share:.3f})")
+        return 'evaluate_production_only'
 
 drift_decision_branch_task = BranchPythonOperator(
     task_id='drift_decision_branch',
@@ -306,8 +306,8 @@ def prepare_drift_aware_data(**kwargs):
     
     # 5. Load all previous batches for cumulative training
     cumulative_data = [initial_train, initial_val]
-    
-    for prev_batch in range(2, batch_number):
+
+    for prev_batch in range(1, batch_number):
         prev_batch_key = f'drift_monitoring/batch_data/batch_{prev_batch}.csv'
         try:
             response = s3.get_object(Bucket=bucket, Key=prev_batch_key)
@@ -490,7 +490,8 @@ def compare_against_production(**kwargs):
     """
     Compare new model vs production on temporal test set using AUC
     """
-    from sklearn.metrics import roc_auc_score, precision_recall_fscore_support
+    from sklearn.metrics import roc_auc_score, precision_recall_fscore_support, roc_curve
+    import json
     
     ti = kwargs['ti']
     mlflow_uri = kwargs['params']['mlflow_uri']
@@ -642,7 +643,10 @@ def compare_against_production(**kwargs):
     )
     
     logging.info(f"New Model - AUC: {new_auc:.3f}, F1: {new_f1:.3f}, Precision: {new_precision:.3f}, Recall: {new_recall:.3f}")
-    
+
+    # Calculate ROC curve for new model
+    fpr_new, tpr_new, thresholds_new = roc_curve(y_test, new_pred_proba)
+
     # 4. Evaluate production model (if exists)
     if has_production:
         # Align features for production model separately (may expect different features)
@@ -684,35 +688,60 @@ def compare_against_production(**kwargs):
         )
         
         logging.info(f"Prod Model - AUC: {prod_auc:.3f}, F1: {prod_f1:.3f}, Precision: {prod_precision:.3f}, Recall: {prod_recall:.3f}")
+
+        # Calculate ROC curve for production model
+        fpr_prod, tpr_prod, thresholds_prod = roc_curve(y_test, prod_pred_proba)
     else:
         prod_auc, prod_precision, prod_recall, prod_f1 = 0, 0, 0, 0
-    
-    # 5. Log metrics to MLflow
+        fpr_prod, tpr_prod, thresholds_prod = None, None, None
+
+    # 5. Log metrics to a dedicated quality gate run (separate from HPO training run)
+    experiment_name = kwargs['params']['experiment_name']
+    mlflow.set_experiment(experiment_name)
     try:
-        with mlflow.start_run(run_id=new_run_id):
+        with mlflow.start_run(run_name=f"quality_gate_batch_{batch_number}"):
+            mlflow.log_param("batch_number", batch_number)
+            mlflow.log_param("test_set_used", test_set_name)
+            mlflow.log_param("training_run_id", new_run_id)
+            mlflow.log_param("model_type", new_model_perf.get('model_type', 'unknown'))
+            mlflow.set_tag("quality_gate", "True")
             mlflow.log_metric("new_auc_test", new_auc)
             mlflow.log_metric("new_f1_test", new_f1)
             mlflow.log_metric("new_precision_test", new_precision)
             mlflow.log_metric("new_recall_test", new_recall)
-            
+
             if has_production:
                 mlflow.log_metric("prod_auc_test", prod_auc)
                 mlflow.log_metric("prod_f1_test", prod_f1)
                 mlflow.log_metric("prod_precision_test", prod_precision)
                 mlflow.log_metric("prod_recall_test", prod_recall)
-                
+
                 mlflow.log_metric("auc_improvement", new_auc - prod_auc)
                 mlflow.log_metric("f1_improvement", new_f1 - prod_f1)
-            
-            # Try to log params - may fail if already logged
-            try:
-                mlflow.log_param("test_set_used", test_set_name)
-                mlflow.log_param("batch_number", batch_number)
-            except Exception as param_err:
-                logging.warning(f"Could not update params (may already exist): {param_err}")
+
+            # Save ROC curve data as artifacts
+            roc_data_new = {
+                'fpr': fpr_new.tolist(),
+                'tpr': tpr_new.tolist(),
+                'thresholds': thresholds_new.tolist(),
+                'auc': new_auc,
+            }
+            with open('/tmp/roc_curve_new.json', 'w') as f:
+                json.dump(roc_data_new, f)
+            mlflow.log_artifact('/tmp/roc_curve_new.json', artifact_path='roc_curves')
+
+            if has_production and fpr_prod is not None:
+                roc_data_prod = {
+                    'fpr': fpr_prod.tolist(),
+                    'tpr': tpr_prod.tolist(),
+                    'thresholds': thresholds_prod.tolist(),
+                    'auc': prod_auc,
+                }
+                with open('/tmp/roc_curve_production.json', 'w') as f:
+                    json.dump(roc_data_prod, f)
+                mlflow.log_artifact('/tmp/roc_curve_production.json', artifact_path='roc_curves')
     except Exception as e:
-        # Log metrics may fail on some runs - continue with decision
-        logging.warning(f"MLflow logging warning: {e}")
+        logging.warning(f"MLflow quality gate logging warning: {e}")
     
     # 6. Decision logic (AUC-based)
     if not has_production:
@@ -760,8 +789,269 @@ compare_against_production_task = PythonOperator(
     python_callable=compare_against_production,
     params={
         'mlflow_uri': env_vars['MLFLOW_TRACKING_URI'],
-        'regression_threshold': env_vars['REGRESSION_THRESHOLD']
+        'regression_threshold': env_vars['REGRESSION_THRESHOLD'],
+        'experiment_name': env_vars['EXPERIMENT_NAME']
     },
+    dag=dag,
+)
+
+# Task 4.5: Evaluate production model only (no retraining path)
+def evaluate_production_only(**kwargs):
+    """
+    Evaluate production model on current batch's test data without retraining.
+    Used when drift is below threshold - still want to track performance.
+    """
+    from sklearn.metrics import roc_auc_score, precision_recall_fscore_support, roc_curve
+    import json
+
+    # 1. Get batch_number from drift detection XCom
+    ti = kwargs['ti']
+    drift_result = ti.xcom_pull(task_ids='run_drift_detection')
+    batch_number = drift_result.get('batch_number', 'unknown') if drift_result else 'unknown'
+
+    logging.info(f"=== PRODUCTION-ONLY EVALUATION: Batch {batch_number} ===")
+
+    # 2. Load production model from MLflow registry
+    mlflow_uri = kwargs['params']['mlflow_uri']
+    mlflow.set_tracking_uri(mlflow_uri)
+
+    try:
+        prod_model = mlflow.sklearn.load_model("models:/HealthPredictModel/Production")
+        logging.info("Loaded production model from registry")
+    except Exception as e:
+        # No production model exists yet (e.g., batch 1 run before batch 3)
+        logging.warning(f"No production model found: {e}")
+        return {'has_metrics': False, 'reason': 'no_production_model', 'batch_number': batch_number}
+
+    # 3. Load or create batch test set (30% of batch data)
+    s3 = boto3.client('s3')
+    bucket = env_vars['S3_BUCKET_NAME']
+    test_key = f"drift_monitoring/test_data/batch_{batch_number}_test.csv"
+
+    try:
+        # Try to load existing test set
+        test_response = s3.get_object(Bucket=bucket, Key=test_key)
+        test_data = pd.read_csv(StringIO(test_response['Body'].read().decode('utf-8')))
+        logging.info(f"Loaded existing test set from {test_key}")
+    except Exception:
+        # Create test set from batch data (70/30 split, matching training pattern)
+        batch_key = f"drift_monitoring/batch_data/batch_{batch_number}.csv"
+        try:
+            batch_response = s3.get_object(Bucket=bucket, Key=batch_key)
+            batch_data = pd.read_csv(StringIO(batch_response['Body'].read().decode('utf-8')))
+
+            # Ensure readmitted_binary exists
+            if 'readmitted_binary' not in batch_data.columns and 'readmitted' in batch_data.columns:
+                batch_data['readmitted_binary'] = (batch_data['readmitted'] == '<30').astype(int)
+
+            _, test_data = train_test_split(
+                batch_data,
+                test_size=0.3,
+                random_state=42,
+                stratify=batch_data['readmitted_binary'] if 'readmitted_binary' in batch_data.columns else None
+            )
+
+            # Save for future use
+            test_csv = test_data.to_csv(index=False)
+            s3.put_object(Bucket=bucket, Key=test_key, Body=test_csv)
+            logging.info(f"Created and saved test set to {test_key}")
+        except Exception as e:
+            logging.error(f"Failed to create test set: {e}")
+            return {'has_metrics': False, 'reason': 'test_data_error', 'batch_number': batch_number}
+
+    # 4. Apply feature engineering (reuse from compare_against_production)
+    import sys
+    sys.path.insert(0, '/home/ubuntu/health-predict')
+    from src.feature_engineering import clean_data, engineer_features
+
+    test_data_clean = clean_data(test_data)
+    test_data_featured = engineer_features(test_data_clean)
+
+    logging.info(f"After feature engineering: {test_data_featured.shape}")
+
+    # 5. One-hot encode categoricals
+    cat_cols = test_data_featured.select_dtypes(include=['object']).columns.tolist()
+    cat_cols = [c for c in cat_cols if c not in ['readmitted_binary', 'readmitted']]
+
+    if cat_cols:
+        logging.info(f"One-hot encoding {len(cat_cols)} categorical columns")
+        test_data_encoded = pd.get_dummies(test_data_featured, columns=cat_cols, drop_first=True)
+    else:
+        test_data_encoded = test_data_featured
+
+    # 6. Prepare features
+    X_test = test_data_encoded.drop(columns=['readmitted_binary', 'readmitted', 'age'], errors='ignore')
+    y_test = test_data_featured['readmitted_binary']
+
+    # 7. Align features with production model (reuse alignment logic)
+    logging.info(f"Attempting to extract feature names from production model (type: {type(prod_model).__name__})")
+    expected_features = None
+
+    # Try feature_names_in_ (scikit-learn style)
+    if hasattr(prod_model, 'feature_names_in_'):
+        logging.info(f"Model has feature_names_in_ attribute: {prod_model.feature_names_in_ is not None}")
+        if prod_model.feature_names_in_ is not None:
+            expected_features = list(prod_model.feature_names_in_)
+            logging.info(f"Got {len(expected_features)} features from feature_names_in_")
+
+    # Try get_booster() for XGBoost models
+    if expected_features is None and hasattr(prod_model, 'get_booster'):
+        logging.info("Trying get_booster() method")
+        try:
+            booster = prod_model.get_booster()
+            logging.info(f"Got booster, checking for feature_names attribute")
+            if hasattr(booster, 'feature_names'):
+                logging.info(f"Booster has feature_names: {booster.feature_names is not None}")
+                if booster.feature_names is not None:
+                    expected_features = list(booster.feature_names)
+                    logging.info(f"Got {len(expected_features)} features from get_booster()")
+        except Exception as e:
+            logging.warning(f"Failed to get feature names from get_booster(): {e}")
+
+    # Method 3: Try n_features_in_ as fallback (know the count but not names)
+    if expected_features is None and hasattr(prod_model, 'n_features_in_'):
+        n_features = prod_model.n_features_in_
+        logging.info(f"Production model expects {n_features} features (no names available, using count)")
+        # If we know the count but not names, pad/truncate to match
+        if len(X_test.columns) != n_features:
+            logging.warning(f"Feature count mismatch: model expects {n_features}, got {len(X_test.columns)}")
+            # Pad with zeros if needed
+            while len(X_test.columns) < n_features:
+                X_test[f'_pad_{len(X_test.columns)}'] = 0
+                logging.info(f"Added padding column: _pad_{len(X_test.columns)-1}")
+            # Truncate if too many
+            if len(X_test.columns) > n_features:
+                logging.warning(f"Truncating from {len(X_test.columns)} to {n_features} features")
+                X_test = X_test.iloc[:, :n_features]
+        logging.info(f"Aligned by count: {X_test.shape}")
+
+    if expected_features is None and not hasattr(prod_model, 'n_features_in_'):
+        logging.error("Could not extract feature names or count from production model - prediction may fail!")
+
+    if expected_features is not None:
+        logging.info(f"Aligning features: model expects {len(expected_features)}, test data has {len(X_test.columns)}")
+
+        # Add missing columns with zeros
+        missing_cols = set(expected_features) - set(X_test.columns)
+        if missing_cols:
+            logging.info(f"Adding {len(missing_cols)} missing columns with zeros")
+            for col in missing_cols:
+                X_test[col] = 0
+
+        # Remove extra columns
+        extra_cols = set(X_test.columns) - set(expected_features)
+        if extra_cols:
+            logging.info(f"Removing {len(extra_cols)} extra columns")
+            X_test = X_test.drop(columns=list(extra_cols))
+
+        # Reorder columns to match model's expected order
+        X_test = X_test[expected_features]
+        logging.info(f"Aligned test features: {X_test.shape}")
+
+    # 8. Evaluate production model
+    prod_pred_proba = prod_model.predict_proba(X_test)[:, 1]
+    prod_pred = (prod_pred_proba > 0.5).astype(int)
+
+    prod_auc = roc_auc_score(y_test, prod_pred_proba)
+    prod_precision, prod_recall, prod_f1, _ = precision_recall_fscore_support(
+        y_test, prod_pred, average='binary', zero_division=0
+    )
+
+    logging.info(f"Production Model - AUC: {prod_auc:.3f}, F1: {prod_f1:.3f}, Precision: {prod_precision:.3f}, Recall: {prod_recall:.3f}")
+
+    # Calculate ROC curve for visualization
+    fpr, tpr, thresholds = roc_curve(y_test, prod_pred_proba)
+
+    # 9. Log to MLflow as quality gate run
+    experiment_name = kwargs['params']['experiment_name']
+    mlflow.set_experiment(experiment_name)
+
+    try:
+        with mlflow.start_run(run_name=f"quality_gate_batch_{batch_number}") as run:
+            # Log params
+            mlflow.log_param("batch_number", batch_number)
+            mlflow.log_param("test_set_used", f"batch_{batch_number}_test")
+            mlflow.log_param("evaluation_type", "production_only")
+
+            # Tag as quality gate run
+            mlflow.set_tag("quality_gate", "True")
+            mlflow.set_tag("decision", "SKIP_NO_DRIFT")
+
+            # Log metrics (use new_* names so dashboard query finds them)
+            mlflow.log_metric("new_auc_test", prod_auc)
+            mlflow.log_metric("new_f1_test", prod_f1)
+            mlflow.log_metric("new_precision_test", prod_precision)
+            mlflow.log_metric("new_recall_test", prod_recall)
+
+            # Also log as prod_* for clarity
+            mlflow.log_metric("prod_auc_test", prod_auc)
+            mlflow.log_metric("prod_f1_test", prod_f1)
+            mlflow.log_metric("prod_precision_test", prod_precision)
+            mlflow.log_metric("prod_recall_test", prod_recall)
+
+            # Improvement is zero (same model)
+            mlflow.log_metric("auc_improvement", 0.0)
+            mlflow.log_metric("f1_improvement", 0.0)
+
+            # Save ROC curve data as artifact
+            roc_data = {
+                'fpr': fpr.tolist(),
+                'tpr': tpr.tolist(),
+                'thresholds': thresholds.tolist(),
+                'auc': prod_auc,
+            }
+            with open('/tmp/roc_curve_production.json', 'w') as f:
+                json.dump(roc_data, f)
+            mlflow.log_artifact('/tmp/roc_curve_production.json', artifact_path='roc_curves')
+
+            logging.info(f"Logged metrics to MLflow run: {run.info.run_id}")
+    except Exception as e:
+        logging.warning(f"MLflow logging failed: {e}")
+
+    return {
+        'has_metrics': True,
+        'batch_number': batch_number,
+        'prod_auc': prod_auc,
+        'prod_f1': prod_f1,
+        'decision': 'SKIP_NO_DRIFT'
+    }
+
+evaluate_production_only_task = PythonOperator(
+    task_id='evaluate_production_only',
+    python_callable=evaluate_production_only,
+    params={
+        'mlflow_uri': env_vars['MLFLOW_TRACKING_URI'],
+        'experiment_name': env_vars['EXPERIMENT_NAME'],
+    },
+    dag=dag,
+)
+
+# Task 4.6: Log completion of production-only evaluation
+def log_production_only_complete(**kwargs):
+    """Log completion of production-only evaluation path."""
+    ti = kwargs['ti']
+    result = ti.xcom_pull(task_ids='evaluate_production_only')
+
+    if not result or not result.get('has_metrics', False):
+        logging.info("=== PRODUCTION-ONLY EVALUATION SKIPPED ===")
+        logging.info(f"Reason: {result.get('reason', 'unknown') if result else 'unknown'}")
+        return {'status': 'skipped_no_production'}
+
+    batch_number = result.get('batch_number', 'unknown')
+    prod_auc = result.get('prod_auc', 0.0)
+    prod_f1 = result.get('prod_f1', 0.0)
+
+    logging.info("=== PRODUCTION-ONLY EVALUATION COMPLETE ===")
+    logging.info(f"Batch: {batch_number}")
+    logging.info(f"Production AUC: {prod_auc:.4f}")
+    logging.info(f"Production F1: {prod_f1:.4f}")
+    logging.info("Decision: SKIP_NO_DRIFT (no retraining needed)")
+
+    return {'status': 'completed', 'batch_number': batch_number}
+
+log_production_only_complete_task = PythonOperator(
+    task_id='log_production_only_complete',
+    python_callable=log_production_only_complete,
     dag=dag,
 )
 
@@ -1462,51 +1752,6 @@ notify_no_deployment_task = PythonOperator(
     dag=dag,
 )
 
-# Skip retraining path (no drift detected)
-def log_no_drift_skip(**kwargs):
-    """Log that retraining was skipped due to no drift detection."""
-    ti = kwargs['ti']
-    drift_result = ti.xcom_pull(task_ids='run_drift_detection')
-
-    logging.info("=== RETRAINING SKIPPED: NO DRIFT DETECTED ===")
-    logging.info(f"Batch: {drift_result.get('batch_number', 'unknown') if drift_result else 'unknown'}")
-    logging.info(f"Drift share: {drift_result.get('drift_share', 0):.3f}" if drift_result else "Drift share: N/A")
-    logging.info(f"Threshold: {env_vars['DRIFT_THRESHOLD']}")
-    logging.info(f"Drifted columns: {drift_result.get('n_drifted_columns', 0)}/{drift_result.get('n_total_columns', 0)}" if drift_result else "")
-    logging.info("Current production model maintained. No retraining needed.")
-    logging.info("=== END ===")
-
-    return {
-        "status": "skipped_no_drift",
-        "drift_result": drift_result
-    }
-
-log_no_drift_skip_task = PythonOperator(
-    task_id='log_no_drift_skip',
-    python_callable=log_no_drift_skip,
-    dag=dag,
-)
-
-def notify_no_drift(**kwargs):
-    """Send notification about skipped retraining due to no drift."""
-    ti = kwargs['ti']
-    skip_data = ti.xcom_pull(task_ids='log_no_drift_skip')
-
-    logging.info("=== NO DRIFT NOTIFICATION ===")
-    if skip_data and skip_data.get('drift_result'):
-        logging.info(f"Status: {skip_data['status']}")
-        logging.info(f"Drift share: {skip_data['drift_result'].get('drift_share', 0):.3f}")
-    logging.info("Production model unchanged. No retraining was triggered.")
-    logging.info("=== END ===")
-
-    return skip_data
-
-notify_no_drift_task = PythonOperator(
-    task_id='notify_no_drift',
-    python_callable=notify_no_drift,
-    dag=dag,
-)
-
 # End task (dummy operator for clean graph visualization)
 end_task = DummyOperator(
     task_id='end',
@@ -1633,5 +1878,5 @@ deployment_decision_branch_task >> check_kubernetes_readiness_task >> register_a
 # Skip deploy path (AUC regression detected)
 deployment_decision_branch_task >> log_skip_decision_task >> notify_no_deployment_task >> end_task
 
-# Skip retrain path (no drift detected)
-drift_decision_branch_task >> log_no_drift_skip_task >> notify_no_drift_task >> end_task 
+# Skip retrain path (no drift detected) - now routes to production-only evaluation
+drift_decision_branch_task >> evaluate_production_only_task >> log_production_only_complete_task >> end_task 
