@@ -231,6 +231,7 @@ services:
       - "8501:8501"
     environment:
       - MLFLOW_TRACKING_URI=http://mlflow:5000
+      - API_URL=http://192.168.49.2:31792
     networks:
       - mlops_network
 
