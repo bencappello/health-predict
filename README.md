@@ -154,19 +154,20 @@ The project leverages a diverse technology stack:
 
 ## Future Enhancements
 
-- **A/B Testing**: Automated comparison of model versions in production with traffic splitting
-- **Explainability**: Integration of SHAP or LIME for model interpretability in clinical settings
-- **Advanced Drift Metrics**: Add PSI and Wasserstein distance for more granular drift sensitivity
-- **Real-time Streaming**: Kafka integration for processing patient data streams as they're generated
-- **Feature Store**: Dedicated feature store (e.g., Feast) for feature versioning and serving consistency
-- **Automated Rollback**: Production monitoring that triggers automatic rollback on performance regression
+- **A/B Testing**: Implement automated comparison of model versions in production using traffic splitting (e.g., Istio weighted routing or Kubernetes canary deployments). This would allow new models to serve a percentage of live traffic while monitoring real-world performance metrics before full rollout, reducing the risk of deploying a model that performs well on test data but poorly on live patient encounters.
+
+- **Explainability**: Integrate SHAP (SHapley Additive exPlanations) or LIME to provide per-prediction feature importance explanations. In clinical settings, physicians need to understand *why* a patient is flagged as high-risk for readmission — not just the probability score. SHAP values could be computed at prediction time and returned alongside the risk score via the API, with aggregate feature importance tracked across batches in the monitoring dashboard.
+
+- **Advanced Drift Metrics**: Supplement the current KS-test and chi-squared drift detection with Population Stability Index (PSI) and Wasserstein distance. PSI provides a standardized drift severity score that is more interpretable for stakeholders, while Wasserstein distance captures distribution shape changes that KS-test may miss. These metrics could be added to the existing Evidently-based detection pipeline and visualized in the Streamlit dashboard alongside the current drift share metric.
+
+- **Real-time Streaming**: Replace the current batch-triggered pipeline with a Kafka-based streaming architecture that processes patient data as encounters are completed. This would enable near-real-time drift detection and continuous model updates rather than the current batch-interval approach. Implementation would involve a Kafka producer at the hospital EHR interface, a Flink or Spark Streaming consumer for feature engineering, and a modified Airflow DAG that triggers on stream-detected drift events.
+
+- **Feature Store**: Adopt a dedicated feature store such as Feast to centralize feature definitions, ensure consistency between training and serving pipelines, and enable feature versioning. Currently, the same feature engineering code is shared between training and inference via Python imports, but a feature store would add point-in-time correctness, feature lineage tracking, and the ability to reuse features across multiple models or teams.
+
+- **Automated Rollback**: Extend the post-deployment health check to continuously monitor prediction API performance (latency, error rates, prediction distribution shifts) and automatically trigger a rollback to the previous model version if degradation is detected. This would use the existing MLflow model registry's version history to revert deployments, combined with Kubernetes rollback commands, providing a safety net beyond the current pre-deployment quality gate.
 
 ## Conclusion
 
 Health Predict demonstrates a comprehensive MLOps approach to healthcare predictive modeling, showcasing the entire machine learning lifecycle from data preparation to production monitoring and automated retraining. The system balances sophisticated ML capabilities with cost-effective infrastructure choices, making it both powerful and practical for real-world healthcare applications.
 
 This project highlights the critical intersection of machine learning and healthcare, providing a tool that not only predicts patient outcomes but does so within a robust framework that ensures reliability, scalability, and adaptability over time.
-
----
-
-*Note: This project was developed as a demonstration of MLOps capabilities and healthcare ML applications. While the models are trained on real healthcare data, this system is not intended for clinical use without proper medical validation and regulatory approval.*

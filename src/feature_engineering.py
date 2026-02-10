@@ -1,3 +1,23 @@
+"""Feature engineering pipeline for the Health Predict system.
+
+Provides the three-step preprocessing pipeline used by both the
+training DAG and the FastAPI prediction service:
+
+  1. ``clean_data()`` — Replace '?' markers with NaN, drop columns with
+     excessive missing values (weight, payer_code, medical_specialty)
+     and patient identifiers, fill remaining NaN with 'Unknown', and
+     filter out expired/hospice patients whose readmission status is
+     undefined.
+  2. ``engineer_features()`` — Create the binary target variable
+     ``readmitted_binary`` (0 = not readmitted, 1 = readmitted) and
+     convert the age bracket strings to ordinal integers (0–9).
+  3. ``preprocess_data()`` — Apply a fitted ``ColumnTransformer`` that
+     StandardScales numeric features and OneHotEncodes categoricals.
+
+Helper functions ``get_preprocessor()``, ``save_preprocessor()``, and
+``load_preprocessor()`` manage the sklearn pipeline artifact.
+"""
+
 import pandas as pd
 import numpy as np
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
@@ -14,7 +34,16 @@ COLS_FILL_NA_MISSING = ['race', 'diag_1', 'diag_2', 'diag_3'] # In EDA, diag_1, 
 EXPIRED_HOSPICE_DISPOSITIONS = [11, 13, 14, 19, 20, 21]
 
 def clean_data(df: pd.DataFrame) -> pd.DataFrame:
-    """Apply cleaning steps to the dataframe."""
+    """Apply cleaning steps to the dataframe.
+
+    Steps performed:
+      - Replace '?' with NaN in all object-type columns.
+      - Drop high-missing columns defined in COLS_TO_DROP_INITIAL
+        (weight, payer_code, medical_specialty, encounter_id, patient_nbr).
+      - Fill remaining NaN in COLS_FILL_NA_MISSING with 'Unknown'.
+      - Remove rows where discharge_disposition_id indicates
+        expired or hospice patients (IDs 11, 13, 14, 19, 20, 21).
+    """
     df_cleaned = df.copy()
 
     # Replace '?' with NaN globally
@@ -38,7 +67,13 @@ def clean_data(df: pd.DataFrame) -> pd.DataFrame:
     return df_cleaned
 
 def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
-    """Apply feature engineering steps."""
+    """Apply feature engineering steps.
+
+    Creates ``readmitted_binary`` (0/1) from the three-class
+    ``readmitted`` column and converts the age bracket string
+    (e.g., '[70-80)') to an ordinal integer ``age_ordinal`` (0–9).
+    Original columns are preserved for downstream flexibility.
+    """
     df_featured = df.copy()
 
     # Create binary target variable 'readmitted_binary'

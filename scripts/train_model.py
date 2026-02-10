@@ -1,3 +1,20 @@
+"""Ray Tune HPO training orchestrator for the Health Predict pipeline.
+
+Called by the Airflow DAG's training task.  Loads train/validation data
+from S3, applies the feature engineering pipeline, fits a sklearn
+ColumnTransformer preprocessor, then launches a Ray Tune hyperparameter
+search over XGBoost configurations using the ASHA early-stopping
+scheduler.  The best model is retrained on the full training set and
+logged to MLflow with its preprocessor artifact.
+
+Usage (via Airflow BashOperator)::
+
+    python scripts/train_model.py \\
+        --s3-bucket-name $BUCKET --train-key $TRAIN --validation-key $VAL \\
+        --mlflow-tracking-uri http://mlflow:5000 \\
+        --ray-num-samples 4 --ray-max-epochs-per-trial 3
+"""
+
 import argparse
 import pandas as pd
 import numpy as np
@@ -44,6 +61,11 @@ def load_df_from_s3(bucket: str, key: str, s3_client: boto3.client) -> pd.DataFr
         raise
 
 def evaluate_model(y_true, y_pred, y_proba=None):
+    """Compute classification metrics for a single model evaluation.
+
+    Returns a dict with accuracy, precision, recall, f1_score, and
+    (when y_proba is provided) roc_auc_score.
+    """
     accuracy = accuracy_score(y_true, y_pred)
     precision = precision_score(y_true, y_pred, zero_division=0)
     recall = recall_score(y_true, y_pred, zero_division=0)
@@ -108,6 +130,12 @@ def train_model_hpo(config, X_train, y_train, X_val, y_val, model_name):
 
 
 def main(args):
+    """End-to-end training flow: load data, preprocess, run HPO, log best model.
+
+    Orchestrates the full training pipeline: S3 data loading, feature
+    engineering, preprocessor fitting, Ray Tune HPO over XGBoost, and
+    final model logging to MLflow with the preprocessor artifact.
+    """
     print(f"Starting training script with args: {args}")
     mlflow.set_tracking_uri(args.mlflow_tracking_uri)
     mlflow.set_experiment(args.mlflow_experiment_name)
@@ -172,8 +200,6 @@ def main(args):
     mlflow.log_artifact(local_preprocessor_path, artifact_path="preprocessor")
     print("Logged preprocessor artifact to MLflow run.")
 
-    # TEMP DEBUG: Sample tiny subset of data for ultra-fast training (under 10 seconds)
-    # TODO: Remove data sampling after DAG validation
     print("=== PHASE 2: PRODUCTION XGBOOST TRAINING ===")
     print("Using full dataset and Ray Tune HPO for robust model training")
     

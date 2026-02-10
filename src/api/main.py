@@ -1,3 +1,19 @@
+"""FastAPI prediction service for the Health Predict system.
+
+Serves patient readmission risk predictions via a REST API.  On startup
+the service loads the latest Production model and its fitted preprocessor
+from the MLflow model registry.  Incoming prediction requests pass
+through the same ``clean_data`` / ``engineer_features`` / ``preprocess_data``
+pipeline used during training to ensure feature consistency.
+
+Endpoints:
+  - ``GET /health``      — Liveness/readiness probe for Kubernetes.
+  - ``GET /model-info``  — Returns the loaded model version, run ID, and
+    stage for deployment verification.
+  - ``POST /predict``    — Accepts patient encounter data and returns a
+    binary readmission prediction with probability score.
+"""
+
 import logging
 import os
 import sys
@@ -159,6 +175,14 @@ async def model_info():
 # --- Startup and Shutdown Events (Model loading will go here) ---
 @app.on_event("startup")
 async def load_model_on_startup():
+    """Load the production model and preprocessor from MLflow at startup.
+
+    Connects to the MLflow tracking server, loads the model registered
+    under MODEL_NAME at MODEL_STAGE (default: Production) using pyfunc,
+    then downloads and loads the fitted sklearn preprocessor artifact
+    from the same run.  Populates ``model_metadata`` with version info
+    used by the ``/model-info`` verification endpoint.
+    """
     global model, preprocessor, model_metadata
     try:
         mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
@@ -218,6 +242,13 @@ async def shutdown_event():
 # --- API Endpoints --- 
 @app.post("/predict", response_model=InferenceResponse)
 async def predict(input_data: InferenceInput):
+    """Return a readmission prediction for a single patient encounter.
+
+    Applies the full preprocessing pipeline (clean, engineer features,
+    preprocess with the fitted ColumnTransformer) to the input, then
+    runs the loaded model to produce a binary prediction and a
+    probability score for the positive (readmitted) class.
+    """
     global model, preprocessor
     if model is None:
         logger.error("Model is not loaded. API cannot make predictions.")

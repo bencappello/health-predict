@@ -1,3 +1,16 @@
+"""Partition the raw UCI Diabetes dataset into initial and future splits.
+
+Downloads the raw CSV from S3, separates the first 20% as "initial" data
+(further split into train / validation / test), and reserves the remaining
+80% as "future" data.  The future data is later partitioned into numbered
+batches by ``create_drift_aware_batches.py`` to simulate data drift in the
+production pipeline.
+
+This chronological partitioning strategy ensures that the model is first
+trained on a representative initial sample and then evaluated against
+progressively newer data, mirroring real-world data arrival patterns.
+"""
+
 import argparse
 import logging
 import os
